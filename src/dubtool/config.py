@@ -104,15 +104,24 @@ class DubConfig:
     #
     # min/max_stretch_ratio are therefore much tighter than before (used to
     # bound the *entire* correction; now only the small residual after step
-    # 1). min/max_native_speed are more generous since that stage is
-    # cheaper to push further without obvious quality loss — but this is a
-    # starting point, not a value validated across many voices/languages;
-    # revisit if a different TTS backend's speed control behaves worse at
-    # the extremes.
-    min_native_speed: float = 0.7
-    max_native_speed: float = 1.5
-    min_stretch_ratio: float = 0.9
-    max_stretch_ratio: float = 1.1
+    # 1).
+    #
+    # Both sets of bounds were tightened further after real anime-dialogue
+    # testing still sounded "stretchy" even under the two-pass scheme: 4 of
+    # 5 segments in that run hit a clamp, and with the old bounds
+    # (0.7-1.5 native, 0.9-1.1 residual) a segment needing heavy correction
+    # could still end up ~1.5x*1.1x ≈ 1.65x off natural pace in the worst
+    # case — both stages maxed out simultaneously, compounding their
+    # artifacts. Dramatic/expressive delivery (anime dialogue, unlike calm
+    # narration) makes even a "modest" 10-50% stretch read as audibly
+    # unnatural. Tightened to prioritize accepting timing drift over
+    # distorting the voice much more aggressively than before — this is a
+    # real tradeoff, not a free lunch: expect more segments to end early/
+    # late relative to the original now.
+    min_native_speed: float = 0.85
+    max_native_speed: float = 1.2
+    min_stretch_ratio: float = 0.95
+    max_stretch_ratio: float = 1.05
 
     # None (the default) means: don't force a delivery style, clone the
     # reference speaker's own natural prosody instead (see

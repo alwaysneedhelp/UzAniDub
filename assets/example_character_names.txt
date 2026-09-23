@@ -1,0 +1,9 @@
+# Example cast-list file for --names, one character/place name per line.
+# Blank lines and lines starting with # are ignored.
+# Copy this file per show and pass its path: --names path/to/your_cast.txt
+Naruto
+Sasuke
+Sakura
+Kakashi
+Yahiko
+Konoha

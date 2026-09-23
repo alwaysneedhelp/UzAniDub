@@ -4,10 +4,20 @@ Diarization gives us a (possibly single, for the pre-step-4 MVP) speaker_id
 and time ranges where they're speaking; from those, we pick a short
 contiguous window of real speech to hand to the TTS backend as its
 zero-shot cloning reference. This is a simple heuristic (sustained RMS
-energy, no clipping, not too much internal silence), not a VAD model — good
-enough to dodge the failure modes that actually matter (grabbing a silent
-gap or a clipped/breath-noise moment), not a claim of picking the *best*
-possible clip.
+energy, no clipping, not too much internal silence, some internal dynamic
+range), not a VAD model — good enough to dodge the failure modes that
+actually matter (grabbing a silent gap, a clipped/breath-noise moment, or a
+flat/undynamic stretch), not a claim of picking the *best* possible clip.
+
+The dynamic-range term matters more than it might look: a pitch-variance
+check on real output (a dramatic anime monologue) showed the *extracted
+reference clip* had far less pitch variation than the character's actual
+delivery elsewhere in the scene — the old scoring optimized purely for
+loud+sustained+non-silent, which systematically favors a flatter-sounding
+stretch over an expressive one. Since zero-shot cloning (see
+backends/tts_cosyvoice.py) reproduces *the reference clip's own* prosody,
+not the speaker's overall range, a flat reference clip produces a flat
+clone no matter how expressive the source character really is.
 """
 from __future__ import annotations
 
@@ -111,6 +121,71 @@ def extract_reference_clips(
     return result
 
 
+def extract_segment_reference(
+    segment: Segment,
+    vocals_path: Path,
+    out_path: Path,
+    raw_audio_path: Path | None = None,
+    background_path: Path | None = None,
+    min_duration: float = 1.5,
+    max_duration: float = 10.0,
+    background_energy_ratio: float = 0.1,
+) -> ReferenceClip | None:
+    """Uses a single segment's *own* original-language audio as its voice-
+    cloning reference, instead of one fixed clip reused for every line a
+    speaker has in the whole file.
+
+    This exists because a single reference clip fundamentally can't
+    represent a character whose delivery actually varies a lot within one
+    scene (calm menacing monologue vs. a shouted attack name, say) — no
+    matter how well `extract_reference_clips`' window-picking heuristic is
+    tuned, cloning from *one* fixed moment always imposes that one moment's
+    register on every line. Since each segment's own original audio already
+    has the "correct" emotional delivery for its own content, using it
+    directly for that segment's cloning reference transfers the right
+    register per-line for free, without needing to model emotion at all.
+
+    Returns None (caller should fall back to a speaker-level reference
+    clip) if the segment is too short to be a reliable reference on its own
+    or if it's clipped/distorted.
+    """
+    data, sr = sf.read(str(vocals_path), dtype="float32", always_2d=False)
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+
+    start_sample = max(0, int(segment.start * sr))
+    end_sample = min(len(data), int(segment.end * sr))
+    if end_sample - start_sample < int(min_duration * sr):
+        return None
+
+    max_len = int(max_duration * sr)
+    if end_sample - start_sample > max_len:
+        end_sample = start_sample + max_len
+
+    clip_data = data[start_sample:end_sample]
+    if float(np.abs(clip_data).max()) > 0.99:
+        return None  # clipped — unreliable, fall back to the speaker-level clip
+
+    if raw_audio_path is not None and background_path is not None:
+        bg, bg_sr = sf.read(str(background_path), dtype="float32", always_2d=False)
+        if bg.ndim > 1:
+            bg = bg.mean(axis=1)
+        raw, raw_sr = sf.read(str(raw_audio_path), dtype="float32", always_2d=False)
+        if raw.ndim > 1:
+            raw = raw.mean(axis=1)
+        if bg_sr == sr and raw_sr == sr and end_sample <= len(bg) and end_sample <= len(raw):
+            vocal_rms = float(np.sqrt(np.mean(clip_data**2)))
+            bg_rms = float(np.sqrt(np.mean(bg[start_sample:end_sample] ** 2)))
+            if vocal_rms > 0 and bg_rms < background_energy_ratio * vocal_rms:
+                clip_data = raw[start_sample:end_sample]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out_path), clip_data, sr)
+    return ReferenceClip(
+        path=out_path, start=start_sample / sr, end=start_sample / sr + len(clip_data) / sr, text=segment.text
+    )
+
+
 def _best_window(
     data: np.ndarray,
     sr: int,
@@ -118,10 +193,12 @@ def _best_window(
     target_duration: float,
     min_duration: float,
     hop: float,
+    frame_size: float = 0.1,
 ) -> tuple[np.ndarray, int] | None:
     win_len = int(target_duration * sr)
     hop_len = max(1, int(hop * sr))
     min_len = int(min_duration * sr)
+    frame_len = max(1, int(frame_size * sr))
 
     best_score = -1.0
     best_window: np.ndarray | None = None
@@ -144,7 +221,7 @@ def _best_window(
             if peak > 0.99:  # likely clipping — avoid handing the cloner a distorted reference
                 continue
             silence_frac = float(np.mean(np.abs(window) < 0.01))
-            score = rms * (1.0 - silence_frac)
+            score = rms * (1.0 - silence_frac) * (1.0 + _dynamic_range(window, frame_len))
             if score > best_score:
                 best_score = score
                 best_window = window
@@ -153,3 +230,22 @@ def _best_window(
     if best_window is None:
         return None
     return best_window, best_start_sample
+
+
+def _dynamic_range(window: np.ndarray, frame_len: int) -> float:
+    """Coefficient of variation of frame-wise RMS within `window` — a cheap
+    proxy for "how expressive/dynamic is this clip" without the cost of
+    running real pitch tracking on every candidate window. 0 for a
+    perfectly flat/constant-energy clip; larger for one with real loud/soft
+    contrast (closer to how a character actually delivers dramatic lines).
+    """
+    n_frames = max(1, len(window) // frame_len)
+    if n_frames < 2:
+        return 0.0
+    frame_rms = np.array(
+        [np.sqrt(np.mean(window[i * frame_len : (i + 1) * frame_len] ** 2)) for i in range(n_frames)]
+    )
+    frame_rms = frame_rms[frame_rms > 1e-4]  # ignore near-silent frames, they'd inflate variation spuriously
+    if len(frame_rms) < 2 or np.mean(frame_rms) == 0:
+        return 0.0
+    return float(np.std(frame_rms) / np.mean(frame_rms))

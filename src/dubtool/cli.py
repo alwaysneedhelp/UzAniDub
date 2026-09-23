@@ -38,12 +38,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--names", default=None,
-        help="comma-separated proper nouns (character/place names, etc.) to bias transcription "
-             "toward and protect from mistranslation — matters most for names a generic ASR/MT "
-             "model has never seen, e.g. anime character names",
+        help="proper nouns (character/place names, etc.) to bias transcription toward and "
+             "protect from mistranslation — matters most for names a generic ASR/MT model has "
+             "never seen, e.g. anime character names. Either a comma-separated list "
+             "(\"Naruto,Sasuke,Sakura\") for a one-off, or a path to a text file (one name per "
+             "line, blank lines and #-comments ignored) so a whole show's cast list can be "
+             "reused across episodes without retyping it every run",
     )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
+
+
+def parse_names(value: str) -> list[str]:
+    """`--names` accepts either an inline comma-separated list or a path to
+    a persistent cast-list file (one name per line; blank lines and lines
+    starting with # ignored) — a whole show's characters only need typing
+    out once, not on every single episode/scene run."""
+    path = Path(value)
+    if path.is_file():
+        names = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                names.append(line)
+        return names
+    return [name.strip() for name in value.split(",") if name.strip()]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -67,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.emotion:
         config.tts_emotion = args.emotion
     if args.names:
-        config.proper_nouns = [name.strip() for name in args.names.split(",") if name.strip()]
+        config.proper_nouns = parse_names(args.names)
 
     output_dir = Path("output")
     output_path = args.output or (output_dir / args.video.name)

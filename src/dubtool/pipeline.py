@@ -108,8 +108,23 @@ def run(
             for w in seg.words if w.start < clip.end and w.end > clip.start
         ]
         clip.text = " ".join(w.text for w in overlapping).strip()
-    for seg in segments:
-        clip = reference_clips.get(seg.speaker_id)
+
+    # Prefer each segment's *own* original audio as its cloning reference
+    # over the one fixed speaker-level clip above — a single reference
+    # can't represent a character whose delivery actually varies within a
+    # scene (calm menace vs. a shouted attack name, say); the segment's own
+    # audio already has the right register for its own content, so using it
+    # transfers that per-line instead of imposing one moment's style on
+    # every line a speaker has. Falls back to the speaker-level clip (and
+    # from there, the bundled default) when a segment's own audio is too
+    # short or clipped to be a reliable reference on its own.
+    for i, seg in enumerate(segments):
+        own_clip = reference.extract_segment_reference(
+            seg, vocals_path, work_dir / f"segment_ref_{i:03d}_{seg.speaker_id}.wav",
+            raw_audio_path=full_audio, background_path=background_path,
+        )
+        speaker_clip = reference_clips.get(seg.speaker_id)
+        clip = own_clip or speaker_clip
         seg.reference_audio = clip.path if clip else config.models.default_reference_audio
         seg.reference_text = clip.text if clip and clip.text else config.models.default_reference_text
 
