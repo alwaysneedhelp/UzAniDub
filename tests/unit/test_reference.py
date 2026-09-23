@@ -27,7 +27,7 @@ def test_picks_the_loud_window_over_silence(tmp_path):
     clips = extract_reference_clips(vocals_path, segments, tmp_path, target_duration=3.0, min_duration=2.0)
 
     assert "SPEAKER_00" in clips
-    picked, picked_sr = sf.read(str(clips["SPEAKER_00"]), dtype="float32")
+    picked, picked_sr = sf.read(str(clips["SPEAKER_00"].path), dtype="float32")
     assert picked_sr == sr
     # the picked window should overlap the loud region, not be near-silent
     assert float(np.sqrt(np.mean(picked**2))) > 0.05
@@ -83,7 +83,7 @@ def test_substitutes_raw_audio_when_background_energy_is_negligible(tmp_path):
         raw_audio_path=raw_path, background_path=background_path,
     )
 
-    picked, _ = sf.read(str(clips["SPEAKER_00"]), dtype="float32")
+    picked, _ = sf.read(str(clips["SPEAKER_00"].path), dtype="float32")
     # picked should match the *raw* signal closely, not the noisy "separated" one
     start = 0  # loudness is uniform here, so the window should start near 0
     raw_window = raw[start : start + len(picked)]
@@ -109,6 +109,6 @@ def test_keeps_separated_vocals_when_background_energy_is_significant(tmp_path):
         raw_audio_path=raw_path, background_path=background_path,
     )
 
-    picked, _ = sf.read(str(clips["SPEAKER_00"]), dtype="float32")
+    picked, _ = sf.read(str(clips["SPEAKER_00"].path), dtype="float32")
     # should stay with the clean separated vocals, not the raw+background mix
     assert not np.allclose(picked, raw[: len(picked)], atol=1e-3)

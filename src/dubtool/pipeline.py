@@ -21,7 +21,7 @@ from pathlib import Path
 
 from dubtool.config import DubConfig
 from dubtool.interfaces import Diarizer, Separator, Transcriber, Translator, TTSBackend
-from dubtool.stages import align, extract, mix, mux, reference, resegment
+from dubtool.stages import align, extract, mix, mux, proper_nouns, reference, resegment
 from dubtool.types import DubbingResult, Segment
 
 log = logging.getLogger("dubtool.pipeline")
@@ -94,8 +94,18 @@ def run(
     # mid-sentence produced the worst translations in the whole file). Regroup
     # into complete sentences before translating.
     segments = resegment.resegment_to_sentences(segments)
+
+    # Fill in each reference clip's transcript from the real word-level
+    # transcription now available (words whose time overlaps the clip's
+    # window) — needed for zero-shot prosody cloning in the synthesize stage
+    # below. Segments themselves still only need reference_audio/_text.
+    for clip in reference_clips.values():
+        overlapping = [w for seg in segments for w in seg.words if w.start < clip.end and w.end > clip.start]
+        clip.text = " ".join(w.text for w in overlapping).strip()
     for seg in segments:
-        seg.reference_audio = reference_clips.get(seg.speaker_id)
+        clip = reference_clips.get(seg.speaker_id)
+        seg.reference_audio = clip.path if clip else config.models.default_reference_audio
+        seg.reference_text = clip.text if clip and clip.text else config.models.default_reference_text
 
     log.info("Stage 6/8: translating %d segment(s) to %s", len(segments), config.target_language)
     for seg in segments:
@@ -104,15 +114,17 @@ def run(
         # and the translator needs a real source language to pick the right
         # pivot, not the literal string "auto".
         source_lang = seg.detected_language or config.source_language or "auto"
-        seg.translated_text = backends.translator.translate(
-            seg.text, source_lang=source_lang, target_lang=config.target_language
+        protected_text, name_map = proper_nouns.protect(seg.text, config.proper_nouns)
+        translated = backends.translator.translate(
+            protected_text, source_lang=source_lang, target_lang=config.target_language
         )
+        seg.translated_text = proper_nouns.restore(translated, name_map)
         log.debug("  %.2fs-%.2fs: %r -> %r", seg.start, seg.end, seg.text, seg.translated_text)
 
     log.info("Stage 7/8: synthesizing + time-aligning")
     sr = backends.tts.sample_rate
     for seg in segments:
-        ref = seg.reference_audio or config.models.default_reference_audio
+        ref, ref_text = seg.reference_audio, seg.reference_text
 
         # Pass 1: natural pace, just to measure how long this text actually
         # takes to speak. Pass 2: re-synthesize at a native `speed` aimed at
@@ -120,7 +132,9 @@ def run(
         # has a small residual gap to close instead of carrying the whole
         # correction (see config.py for why — this used to be a single pass
         # and sounded robotic/over-stretched as a result).
-        natural = backends.tts.synthesize(seg.translated_text, ref, emotion=config.tts_emotion)
+        natural = backends.tts.synthesize(
+            seg.translated_text, ref, reference_text=ref_text, emotion=config.tts_emotion
+        )
         natural_duration = len(natural) / sr
         if natural_duration <= 0:
             raw = natural
@@ -131,7 +145,8 @@ def run(
                 raw = natural  # already close enough, skip a redundant second pass
             else:
                 raw = backends.tts.synthesize(
-                    seg.translated_text, ref, emotion=config.tts_emotion, speed=native_speed
+                    seg.translated_text, ref, reference_text=ref_text,
+                    emotion=config.tts_emotion, speed=native_speed,
                 )
 
         seg.synthesized_audio = align.align_segment(

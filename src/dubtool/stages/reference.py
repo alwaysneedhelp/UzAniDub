@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from dubtool.types import Segment
+from dubtool.types import ReferenceClip, Segment
 
 log = logging.getLogger(__name__)
 
@@ -32,12 +32,13 @@ def extract_reference_clips(
     raw_audio_path: Path | None = None,
     background_path: Path | None = None,
     background_energy_ratio: float = 0.1,
-) -> dict[str, Path]:
+) -> dict[str, ReferenceClip]:
     """One reference clip per distinct speaker_id in `segments`, written to
-    `out_dir/reference_<speaker_id>.wav`. Returns {speaker_id: path}; a
-    speaker with no window of at least `min_duration` clean seconds is
-    omitted — the caller falls back to the bundled default reference voice
-    for them.
+    `out_dir/reference_<speaker_id>.wav`. Returns {speaker_id: ReferenceClip}
+    (with `.text` left empty — the caller fills it in once transcription
+    data covering the clip's time range is available); a speaker with no
+    window of at least `min_duration` clean seconds is omitted — the caller
+    falls back to the bundled default reference voice for them.
 
     If `raw_audio_path` and `background_path` are both given and the
     background track's energy in the chosen window is low relative to the
@@ -78,7 +79,7 @@ def extract_reference_clips(
         by_speaker.setdefault(seg.speaker_id, []).append(seg)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    result: dict[str, Path] = {}
+    result: dict[str, ReferenceClip] = {}
     for speaker_id, speaker_segments in by_speaker.items():
         window = _best_window(data, sr, speaker_segments, target_duration, min_duration, hop)
         if window is None:
@@ -104,7 +105,9 @@ def extract_reference_clips(
 
         path = out_dir / f"reference_{speaker_id}.wav"
         sf.write(str(path), clip_data, sr)
-        result[speaker_id] = path
+        clip_start = start_sample / sr
+        clip_end = clip_start + len(clip_data) / sr
+        result[speaker_id] = ReferenceClip(path=path, start=clip_start, end=clip_end)
     return result
 
 

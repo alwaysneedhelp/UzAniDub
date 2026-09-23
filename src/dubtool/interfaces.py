@@ -53,9 +53,28 @@ class TTSBackend(Protocol):
     sample_rate: int
 
     def synthesize(
-        self, text: str, reference_audio: Path, emotion: str = "calm", speed: float = 1.0
+        self,
+        text: str,
+        reference_audio: Path,
+        reference_text: str = "",
+        emotion: str | None = None,
+        speed: float = 1.0,
     ) -> np.ndarray:
         """Returns mono float32 audio at self.sample_rate.
+
+        `reference_text` is the transcript of `reference_audio` — a backend
+        capable of true zero-shot cloning (matching the reference speaker's
+        own prosody/energy rather than imposing a fixed delivery style) needs
+        this to align against. Pass "" if unknown; a backend without a
+        zero-shot mode can just ignore it.
+
+        `emotion`, when given, requests a specific delivery style
+        (implementation-defined preset names) *instead of* cloning the
+        reference's natural prosody — use this for deliberate style control,
+        not as the default. Real testing showed always forcing an emotion
+        (e.g. a "calm" instruction on every segment) flattens out a speaker's
+        actual intonation and reads as robotic — leave it None to let
+        zero-shot prosody cloning (via reference_text) carry through instead.
 
         `speed` is a native playback-rate hint (1.0 = the model's normal
         pace, >1 faster, <1 slower) passed through to the backend's own

@@ -30,7 +30,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--keep-intermediate", action="store_true",
         help="keep extracted audio, separated tracks, etc. in the work dir for debugging",
     )
-    p.add_argument("--emotion", default=None, help="TTS emotion preset (default: calm)")
+    p.add_argument(
+        "--emotion", default=None,
+        help="force a TTS delivery style preset instead of cloning the reference speaker's own "
+             "prosody (default: clone their natural prosody — see docs/config.py for why)",
+    )
+    p.add_argument(
+        "--names", default=None,
+        help="comma-separated proper nouns (character/place names, etc.) to bias transcription "
+             "toward and protect from mistranslation — matters most for names a generic ASR/MT "
+             "model has never seen, e.g. anime character names",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -51,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     config.keep_intermediate = args.keep_intermediate
     if args.emotion:
         config.tts_emotion = args.emotion
+    if args.names:
+        config.proper_nouns = [name.strip() for name in args.names.split(",") if name.strip()]
 
     output_dir = Path("output")
     output_path = args.output or (output_dir / args.video.name)

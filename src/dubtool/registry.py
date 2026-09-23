@@ -42,7 +42,9 @@ def _build_transcriber(config: DubConfig):
     if name == "faster_whisper":
         from dubtool.backends.transcribe_whisper import FasterWhisperTranscriber
         return FasterWhisperTranscriber(
-            model_size=config.models.whisper_model, language=config.source_language
+            model_size=config.models.whisper_model,
+            language=config.source_language,
+            proper_nouns=config.proper_nouns,
         )
     raise ValueError(f"unknown transcribe backend: {name!r}")
 

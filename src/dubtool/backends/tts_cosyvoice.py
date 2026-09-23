@@ -102,15 +102,49 @@ class CosyVoiceNavoiyTTS:
         self._model.model.llm.eval()
 
     def synthesize(
-        self, text: str, reference_audio: Path, emotion: str = "calm", speed: float = 1.0
+        self,
+        text: str,
+        reference_audio: Path,
+        reference_text: str = "",
+        emotion: str | None = None,
+        speed: float = 1.0,
     ) -> np.ndarray:
-        entry = self._emotions.get(emotion.lower().strip("[]"))
-        if entry is None:
-            valid = ", ".join(sorted(self._emotions))
-            raise ValueError(f"Unknown TTS emotion {emotion!r}. Available: {valid}")
-
         normalized_text = self._normalize(text, mode="infer")
-        instruction = entry["instruct"].strip() + "<|endofprompt|>"
+        reference_audio = str(Path(reference_audio).resolve())
+
+        # Three modes, in priority order:
+        #  1. `emotion` given -> inference_instruct2: deliberately override
+        #     prosody with a fixed delivery style. Useful for intentional
+        #     style control, but forcing this on *every* segment is what
+        #     made earlier output sound robotic — a "calm" instruction on
+        #     everything flattens whatever intonation the source speaker
+        #     actually had.
+        #  2. `reference_text` given -> inference_zero_shot: clones the
+        #     reference clip's own prosody/energy instead of imposing one.
+        #     This is the default path now, since the reference clip is
+        #     real speech from the actual speaker (see stages/reference.py).
+        #  3. Neither -> fall back to a neutral instruct2 "calm" delivery
+        #     rather than erroring; loses prosody cloning but stays usable
+        #     (e.g. the bundled default reference before its transcript is
+        #     known).
+        if emotion is not None:
+            entry = self._emotions.get(emotion.lower().strip("[]"))
+            if entry is None:
+                valid = ", ".join(sorted(self._emotions))
+                raise ValueError(f"Unknown TTS emotion {emotion!r}. Available: {valid}")
+            instruction = entry["instruct"].strip() + "<|endofprompt|>"
+            infer = lambda: self._model.inference_instruct2(  # noqa: E731
+                normalized_text, instruction, reference_audio, stream=False, speed=speed,
+            )
+        elif reference_text.strip():
+            infer = lambda: self._model.inference_zero_shot(  # noqa: E731
+                normalized_text, reference_text.strip(), reference_audio, stream=False, speed=speed,
+            )
+        else:
+            instruction = self._emotions["xotirjam"]["instruct"].strip() + "<|endofprompt|>"  # "calm"
+            infer = lambda: self._model.inference_instruct2(  # noqa: E731
+                normalized_text, instruction, reference_audio, stream=False, speed=speed,
+            )
 
         # CosyVoice2's own `speed` is applied via mel-spectrogram
         # interpolation *before* vocoding (see cosyvoice/cli/model.py:
@@ -121,10 +155,7 @@ class CosyVoiceNavoiyTTS:
         # stages/align.py's waveform-domain phase vocoder.
         chunks = []
         with self._torch.inference_mode():
-            for result in self._model.inference_instruct2(
-                normalized_text, instruction, str(Path(reference_audio).resolve()),
-                stream=False, speed=speed,
-            ):
+            for result in infer():
                 chunks.append(result["tts_speech"].detach().cpu())
         if not chunks:
             raise RuntimeError(f"CosyVoice2 returned no audio for text: {text!r}")

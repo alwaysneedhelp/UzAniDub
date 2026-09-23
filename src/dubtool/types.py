@@ -20,6 +20,24 @@ class Word:
 
 
 @dataclass
+class ReferenceClip:
+    """A voice-cloning reference clip for one speaker, plus what they
+    actually said during it. The transcript matters for zero-shot cloning
+    (see backends/tts_cosyvoice.py): CosyVoice2's inference_zero_shot clones
+    the reference's own natural prosody, but needs to know the reference
+    clip's text to align against — unlike inference_instruct2, which
+    replaces natural prosody with a fixed instruction ("speak calmly") and
+    so doesn't need it, at the cost of flattening the speaker's real
+    delivery.
+    """
+
+    path: Path
+    start: float
+    end: float
+    text: str = ""
+
+
+@dataclass
 class Segment:
     """One utterance turn: a single speaker talking between start and end.
 
@@ -40,6 +58,7 @@ class Segment:
     detected_language: str | None = None  # set by the transcriber (e.g. whisper's language-ID), used to pick a translation pivot
     translated_text: str = ""
     reference_audio: Path | None = None
+    reference_text: str = ""  # transcript of reference_audio, for zero-shot prosody cloning
     synthesized_audio: np.ndarray | None = None
     synthesized_sr: int | None = None
 

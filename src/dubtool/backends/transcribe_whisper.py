@@ -16,15 +16,30 @@ class FasterWhisperTranscriber:
         language: str | None = None,
         device: str = "cpu",
         compute_type: str = "int8",
+        proper_nouns: list[str] | None = None,
     ):
         from faster_whisper import WhisperModel
 
         self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
         self._language = language  # None = auto-detect
+        # Whisper's initial_prompt biases decoding toward vocabulary it's
+        # seen recently in the "context" — feeding known proper nouns here
+        # measurably helps recognize names an ASR model would otherwise
+        # guess at (e.g. transcribing an unfamiliar name as the nearest
+        # common word/acronym it does know). Matters most for content like
+        # anime with character names no general-purpose model has seen.
+        self._initial_prompt = (
+            "Character and place names in this audio: " + ", ".join(proper_nouns) + "."
+            if proper_nouns
+            else None
+        )
 
     def transcribe(self, audio_path: Path, segments: list[Segment]) -> list[Segment]:
         whisper_segments, info = self._model.transcribe(
-            str(audio_path), language=self._language, word_timestamps=True
+            str(audio_path),
+            language=self._language,
+            word_timestamps=True,
+            initial_prompt=self._initial_prompt,
         )
         speaker_id = segments[0].speaker_id if segments else "SPEAKER_00"
 

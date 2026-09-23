@@ -24,6 +24,14 @@ class ModelPaths:
     cosyvoice_base_dir: Path = Path("poc/models/CosyVoice2-0.5B")
     navoiy_checkpoint: Path = Path("poc/models/navoiy-tts/emotion_600h_joint.pt")
     default_reference_audio: Path = Path("assets/default_reference.wav")
+    # Exact transcript of default_reference_audio (generated via macOS `say`
+    # — see poc/reference.wav) — known up front since we synthesized it
+    # ourselves, letting the bundled fallback voice use zero-shot prosody
+    # cloning too instead of falling further back to a flat instruct2 default.
+    default_reference_text: str = (
+        "Hi, this is a short sample recording used only to test a voice "
+        "cloning research prototype. It is not a real person's voice."
+    )
 
     whisper_model: str = "small"
     # Default translator: an int8 CTranslate2 quantization of MADLAD-400
@@ -51,6 +59,17 @@ class DubConfig:
     # step 2 (this MVP) always uses num_speakers=1 behavior via the diarize
     # stub; the field exists now so step 4 doesn't need a config-shape change.
     num_speakers: int | None = None
+
+    # Proper nouns (character/place names, etc.) that matter for both
+    # transcription accuracy and translation fidelity — see
+    # transcribe_whisper.py (passed as an ASR initial_prompt to bias
+    # recognition) and stages/proper_nouns.py (kept verbatim through
+    # translation rather than risking mistranslation/mangling by the MT
+    # model). Empty by default; set via `--names` or a config file. Matters
+    # most for content with names an ASR/MT model has never seen — e.g.
+    # anime character names — where a generic model will otherwise
+    # transcribe/translate them into the nearest common word.
+    proper_nouns: list[str] = field(default_factory=list)
 
     keep_intermediate: bool = False
     # None => pipeline.run() allocates a fresh temp dir per run. Different
@@ -91,7 +110,14 @@ class DubConfig:
     min_stretch_ratio: float = 0.9
     max_stretch_ratio: float = 1.1
 
-    tts_emotion: str = "calm"
+    # None (the default) means: don't force a delivery style, clone the
+    # reference speaker's own natural prosody instead (see
+    # backends/tts_cosyvoice.py and interfaces.py's TTSBackend.synthesize
+    # docstring for why — real testing showed forcing "calm" on every
+    # segment flattened the source speaker's actual intonation and read as
+    # robotic). Set explicitly (e.g. via --emotion) only when deliberate
+    # style control is wanted over prosody fidelity.
+    tts_emotion: str | None = None
 
     backends: dict[str, str] = field(
         # "translate" defaults to madlad (Apache-2.0, ~3GB int8 CTranslate2
