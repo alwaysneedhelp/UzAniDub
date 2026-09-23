@@ -56,9 +56,13 @@ class DubConfig:
     target_language: str = "uz"
     source_language: str | None = None  # None = auto-detect at transcription time
 
-    # step 2 (this MVP) always uses num_speakers=1 behavior via the diarize
-    # stub; the field exists now so step 4 doesn't need a config-shape change.
+    # Hint for pyannote (ignored by the single-speaker stub).
     num_speakers: int | None = None
+    # Hugging Face access token for pyannote's gated diarization models —
+    # None reads from the HF_TOKEN environment variable instead (see
+    # backends/diarize_pyannote.py). Exists as a config field mainly so a
+    # YAML config can set it without relying on env var setup.
+    hf_token: str | None = None
 
     # Proper nouns (character/place names, etc.) that matter for both
     # transcription accuracy and translation fidelity — see
@@ -129,11 +133,18 @@ class DubConfig:
         # occasionally hallucinating unrelated phrases — madlad is both
         # better-licensed-than-NLLB and meaningfully better quality than
         # opus_mt).
+        # "diarize" defaults to "auto": real multi-speaker diarization
+        # (pyannote) if an HF_TOKEN is available (env var or config), else
+        # the single-speaker stub — pyannote's models are gated and need a
+        # token with their license terms accepted, so this avoids a hard
+        # dependency on that setup for anyone just trying the tool out.
+        # Force one explicitly via backends["diarize"] = "pyannote" or
+        # "single_speaker_stub" to skip the auto-detection.
         default_factory=lambda: {
             "translate": "madlad",
             "tts": "cosyvoice_navoiy",
             "transcribe": "faster_whisper",
-            "diarize": "single_speaker_stub",
+            "diarize": "auto",
             "separate": "demucs",
         }
     )

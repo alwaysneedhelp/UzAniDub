@@ -99,8 +99,14 @@ def run(
     # transcription now available (words whose time overlaps the clip's
     # window) — needed for zero-shot prosody cloning in the synthesize stage
     # below. Segments themselves still only need reference_audio/_text.
-    for clip in reference_clips.values():
-        overlapping = [w for seg in segments for w in seg.words if w.start < clip.end and w.end > clip.start]
+    # Filtering to the clip's own speaker_id matters once there's more than
+    # one speaker — without it, a clip could pick up another speaker's words
+    # if their timing happens to overlap.
+    for speaker_id, clip in reference_clips.items():
+        overlapping = [
+            w for seg in segments if seg.speaker_id == speaker_id
+            for w in seg.words if w.start < clip.end and w.end > clip.start
+        ]
         clip.text = " ".join(w.text for w in overlapping).strip()
     for seg in segments:
         clip = reference_clips.get(seg.speaker_id)

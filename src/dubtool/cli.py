@@ -24,7 +24,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", type=Path, help="YAML config file overriding defaults")
     p.add_argument(
         "--num-speakers", type=int, default=None,
-        help="hint the diarizer with a known speaker count (ignored by the step-2 single-speaker stub)",
+        help="hint the diarizer with a known speaker count (used by pyannote; ignored by the "
+             "single-speaker stub)",
     )
     p.add_argument(
         "--keep-intermediate", action="store_true",
@@ -46,6 +47,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from dotenv import load_dotenv
+
+    load_dotenv()  # picks up e.g. HF_TOKEN from a .env file, if present
+
     args = build_arg_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

@@ -41,7 +41,6 @@ class FasterWhisperTranscriber:
             word_timestamps=True,
             initial_prompt=self._initial_prompt,
         )
-        speaker_id = segments[0].speaker_id if segments else "SPEAKER_00"
 
         result: list[Segment] = []
         for ws in whisper_segments:
@@ -50,7 +49,7 @@ class FasterWhisperTranscriber:
                 Segment(
                     start=ws.start,
                     end=ws.end,
-                    speaker_id=speaker_id,
+                    speaker_id=_speaker_at(segments, (ws.start + ws.end) / 2),
                     text=ws.text.strip(),
                     words=words,
                     detected_language=info.language,
@@ -61,3 +60,23 @@ class FasterWhisperTranscriber:
             len(result), info.language, info.language_probability,
         )
         return result
+
+
+def _speaker_at(diarized_segments: list[Segment], t: float) -> str:
+    """Which diarized speaker was talking at time `t`.
+
+    Whisper transcribes the whole track in one pass, independent of
+    diarization boundaries — its own segments don't inherit a speaker_id for
+    free, they have to be matched back against the diarized turns by time.
+    A single-speaker diarizer makes this a no-op (everything matches the one
+    turn), which is exactly why an earlier version of this function got away
+    with just grabbing `segments[0].speaker_id` for everything — that silently
+    breaks the moment a real multi-speaker diarizer is used, collapsing every
+    speaker's lines onto whichever one happened to be diarized first.
+    """
+    for seg in diarized_segments:
+        if seg.start <= t < seg.end:
+            return seg.speaker_id
+    if not diarized_segments:
+        return "SPEAKER_00"
+    return min(diarized_segments, key=lambda s: min(abs(s.start - t), abs(s.end - t))).speaker_id

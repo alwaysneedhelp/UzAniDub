@@ -7,6 +7,8 @@ them installed.
 """
 from __future__ import annotations
 
+import os
+
 from dubtool.config import DubConfig
 from dubtool.pipeline import Backends
 
@@ -31,6 +33,11 @@ def _build_separator(config: DubConfig):
 
 def _build_diarizer(config: DubConfig):
     name = config.backends["diarize"]
+    if name == "auto":
+        name = "pyannote" if (config.hf_token or os.environ.get("HF_TOKEN")) else "single_speaker_stub"
+    if name == "pyannote":
+        from dubtool.backends.diarize_pyannote import PyannoteDiarizer
+        return PyannoteDiarizer(hf_token=config.hf_token)
     if name == "single_speaker_stub":
         from dubtool.stages.diarize import SingleSpeakerStub
         return SingleSpeakerStub()

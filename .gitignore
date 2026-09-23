@@ -12,6 +12,13 @@ dist/
 .DS_Store
 output/
 
-# Real, user-supplied test media — not ours to redistribute publicly
-# (unlike poc/reference.wav, which is synthetic macOS `say` output).
-poc/videoplayback.*
+# Real, user-supplied test media (recordings, copyrighted clips, ...) is
+# not ours to redistribute publicly. Allowlist rather than blocklist so a
+# new test file dropped into poc/ (there have already been several, by
+# different names each time) is excluded by default instead of needing a
+# new .gitignore line remembered every time — only synthetic/generated
+# assets we made ourselves are explicitly let through.
+poc/*
+!poc/poc_infer.py
+!poc/reference.wav
+!poc/output_uzbek_cloned.wav
