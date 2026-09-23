@@ -45,6 +45,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
              "line, blank lines and #-comments ignored) so a whole show's cast list can be "
              "reused across episodes without retyping it every run",
     )
+    p.add_argument(
+        "--voice-bank-dir", type=Path, default=None,
+        help="directory for the persistent cross-run voice bank (default: ./voice_bank) — "
+             "lets the same character clone consistently across separate runs (e.g. different "
+             "episodes of a show) instead of each run re-extracting independently",
+    )
+    p.add_argument(
+        "--no-voice-bank", action="store_true",
+        help="disable the persistent voice bank — this run's reference clips stay purely "
+             "self-contained, matching the original (pre-voice-bank) behavior",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -87,6 +98,10 @@ def main(argv: list[str] | None = None) -> int:
         config.tts_emotion = args.emotion
     if args.names:
         config.proper_nouns = parse_names(args.names)
+    if args.no_voice_bank:
+        config.voice_bank_dir = None
+    elif args.voice_bank_dir is not None:
+        config.voice_bank_dir = args.voice_bank_dir
 
     output_dir = Path("output")
     output_path = args.output or (output_dir / args.video.name)

@@ -55,6 +55,9 @@ dependencies = [
   "scipy==1.17.1",
   "python-dotenv==1.2.3",
   "pyannote.audio==4.0.7",  # optional in practice: only loaded if diarize=pyannote/auto+HF_TOKEN
+  "spacy==3.8.16",  # auto-detecting character/place names from the transcript (stages/auto_names.py)
+  "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+  "resemblyzer==0.1.4",  # cross-run voice identity matching (stages/voice_bank.py)
   "setuptools<81",
 ]
 

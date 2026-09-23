@@ -12,6 +12,11 @@ dist/
 .DS_Store
 output/
 
+# Extracted voice-reference clips derived from whatever real (often
+# copyrighted) content the user dubs — same concern as the poc/ allowlist
+# below, not ours to redistribute.
+voice_bank/
+
 # Real, user-supplied test media (recordings, copyrighted clips, ...) is
 # not ours to redistribute publicly. Allowlist rather than blocklist so a
 # new test file dropped into poc/ (there have already been several, by

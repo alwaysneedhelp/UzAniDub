@@ -22,24 +22,35 @@ class FasterWhisperTranscriber:
 
         self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
         self._language = language  # None = auto-detect
+        self._base_proper_nouns = list(proper_nouns) if proper_nouns else []
+
+    def _initial_prompt(self, extra_proper_nouns: list[str] | None = None) -> str | None:
         # Whisper's initial_prompt biases decoding toward vocabulary it's
         # seen recently in the "context" — feeding known proper nouns here
         # measurably helps recognize names an ASR model would otherwise
         # guess at (e.g. transcribing an unfamiliar name as the nearest
         # common word/acronym it does know). Matters most for content like
         # anime with character names no general-purpose model has seen.
-        self._initial_prompt = (
-            "Character and place names in this audio: " + ", ".join(proper_nouns) + "."
-            if proper_nouns
-            else None
-        )
+        names = list(self._base_proper_nouns)
+        for name in extra_proper_nouns or []:
+            if name.lower() not in (n.lower() for n in names):
+                names.append(name)
+        if not names:
+            return None
+        return "Character and place names in this audio: " + ", ".join(names) + "."
 
-    def transcribe(self, audio_path: Path, segments: list[Segment]) -> list[Segment]:
+    def transcribe(
+        self, audio_path: Path, segments: list[Segment], extra_proper_nouns: list[str] | None = None
+    ) -> list[Segment]:
+        """`extra_proper_nouns` adds to (not replaces) whatever proper nouns
+        this transcriber was constructed with — used for a second
+        auto-names-informed transcription pass (see pipeline.py) without
+        needing a second transcriber instance."""
         whisper_segments, info = self._model.transcribe(
             str(audio_path),
             language=self._language,
             word_timestamps=True,
-            initial_prompt=self._initial_prompt,
+            initial_prompt=self._initial_prompt(extra_proper_nouns),
         )
 
         result: list[Segment] = []

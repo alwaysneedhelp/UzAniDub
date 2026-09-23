@@ -35,10 +35,20 @@ class Diarizer(Protocol):
 class Transcriber(Protocol):
     """Fills in text + word-level timestamps for each diarized segment."""
 
-    def transcribe(self, audio_path: Path, segments: list[Segment]) -> list[Segment]:
+    def transcribe(
+        self, audio_path: Path, segments: list[Segment], extra_proper_nouns: list[str] | None = None
+    ) -> list[Segment]:
         """Takes the Segments from diarize() and returns them (possibly
         re-split at ASR-detected boundaries within each speaker turn) with
-        .text and .words populated. speaker_id is preserved/inherited."""
+        .text and .words populated. speaker_id is preserved/inherited.
+
+        `extra_proper_nouns` adds to whatever proper nouns the backend was
+        already configured with, for a given call only — pipeline.py uses
+        this to run a second transcription pass biased toward names
+        auto-detected from the first pass, without needing a second
+        backend instance. A backend without a proper-noun bias mechanism
+        can just ignore it.
+        """
         ...
 
 

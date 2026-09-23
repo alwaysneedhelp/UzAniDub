@@ -64,6 +64,15 @@ class DubConfig:
     # YAML config can set it without relying on env var setup.
     hf_token: str | None = None
 
+    # Persistent, cross-run per-speaker voice matching (see
+    # stages/voice_bank.py) — lets the same character clone from the same
+    # reference across separate `dubtool` runs (e.g. different episodes of
+    # a show), instead of every run independently re-extracting its own.
+    # None disables it (each run purely self-contained, matching the
+    # original single-run behavior).
+    voice_bank_dir: Path | None = Path("voice_bank")
+    voice_bank_similarity_threshold: float = 0.75
+
     # Proper nouns (character/place names, etc.) that matter for both
     # transcription accuracy and translation fidelity — see
     # transcribe_whisper.py (passed as an ASR initial_prompt to bias

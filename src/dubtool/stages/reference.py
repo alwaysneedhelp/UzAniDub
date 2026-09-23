@@ -232,6 +232,23 @@ def _best_window(
     return best_window, best_start_sample
 
 
+def clip_quality_score(path: Path, frame_size: float = 0.1) -> float:
+    """Scores an already-extracted clip file the same way `_best_window`
+    scores window candidates (rms * non-silence * dynamic-range) — used by
+    stages/voice_bank.py to decide whether a new run's clip for a
+    recognized voice is worth replacing the one already stored.
+    """
+    data, sr = sf.read(str(path), dtype="float32", always_2d=False)
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    if len(data) == 0:
+        return 0.0
+    rms = float(np.sqrt(np.mean(data**2)))
+    silence_frac = float(np.mean(np.abs(data) < 0.01))
+    frame_len = max(1, int(frame_size * sr))
+    return rms * (1.0 - silence_frac) * (1.0 + _dynamic_range(data, frame_len))
+
+
 def _dynamic_range(window: np.ndarray, frame_len: int) -> float:
     """Coefficient of variation of frame-wise RMS within `window` — a cheap
     proxy for "how expressive/dynamic is this clip" without the cost of
