@@ -51,6 +51,19 @@ class FasterWhisperTranscriber:
             language=self._language,
             word_timestamps=True,
             initial_prompt=self._initial_prompt(extra_proper_nouns),
+            # Whisper's default (True) feeds each segment's own transcript
+            # back in as context for decoding the next one — this is the
+            # documented, common cause of hallucination/repetition loops on
+            # longer files: one bad decode poisons the context and the
+            # model gets stuck echoing an earlier line instead of
+            # transcribing what's actually being said, sometimes for
+            # minutes at a stretch. Diagnosed on real content: a 5-minute
+            # documentary produced the exact same sentence verbatim at four
+            # wildly different timestamps (158s/218s/249s/279s) while the
+            # real, different narration at those points (confirmed by
+            # re-transcribing those exact spans in isolation, where it came
+            # out correctly) was silently lost.
+            condition_on_previous_text=False,
         )
 
         result: list[Segment] = []
