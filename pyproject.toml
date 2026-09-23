@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dubtool"
+version = "0.1.0"
+description = "Video dubbing into Uzbek with speaker voice cloning."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+
+# Pinned against a real `pip freeze` of a working macOS ARM64 CPU install
+# (step-2 MVP verified end to end against this exact set on 2026-09-23).
+# numpy==2.4.6 despite torch/transformers historically preferring the 1.x
+# line: this venv proved CosyVoice2 + the rest of the stack works fine
+# against it, so it's pinned as verified rather than downgraded on spec.
+dependencies = [
+  "numpy==2.4.6",
+  "torch==2.14.0",
+  "torchaudio==2.11.0",
+  "transformers==4.51.3",
+  "sentencepiece==0.2.2",
+  "sacremoses==0.2.0",   # MarianTokenizer (OPUS-MT) wants this; silent quality fallback without it
+  "librosa==0.10.2",
+  "soundfile==0.12.1",
+  "pyyaml==6.0.3",
+  "demucs==4.1.0",
+  "faster-whisper==1.2.1",
+  "conformer==0.3.2",
+  "diffusers==0.29.0",
+  "lightning==2.2.4",
+  "HyperPyYAML==1.2.3",
+  "onnxruntime==1.18.0",
+  "inflect==7.3.1",
+  "x-transformers==2.11.24",
+  "wetext==0.0.4",
+  "pyworld==0.3.4",
+  "omegaconf==2.3.0",
+  "hydra-core==1.3.2",
+  "networkx==3.6.1",
+  "pyarrow==18.1.0",
+  "pydantic==2.7.0",
+  "openai-whisper==20250625",
+  "gdown==6.4.0",
+  "matplotlib==3.11.2",
+  "wget==3.2",
+  "rootutils==1.0.7",
+  "scipy==1.17.1",
+  "setuptools<81",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[project.scripts]
+dubtool = "dubtool.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dubtool"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not integration'"
+markers = [
+  "integration: slow, real-model end-to-end pipeline test (run explicitly with `pytest -m integration`)",
+]

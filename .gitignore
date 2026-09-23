@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.dubtool_work/
+poc/models/
+poc/CosyVoice/
+poc/*.log
+*.egg-info/
+build/
+dist/
+.DS_Store
+output/
+
+# Real, user-supplied test media — not ours to redistribute publicly
+# (unlike poc/reference.wav, which is synthetic macOS `say` output).
+poc/videoplayback.*
