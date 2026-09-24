@@ -26,6 +26,7 @@ from dubtool.stages import (
     auto_names,
     emotion,
     extract,
+    loudness,
     mix,
     mux,
     proper_nouns,
@@ -231,13 +232,19 @@ def run(
                     emotion=seg_emotion, speed=native_speed,
                 )
 
-        seg.synthesized_audio = align.align_segment(
+        aligned = align.align_segment(
             raw,
             sr,
             target_duration=seg.duration,
             min_ratio=config.min_stretch_ratio,
             max_ratio=config.max_stretch_ratio,
         )
+        # CosyVoice2 renders each segment independently and its output level
+        # varies noticeably line to line even for similar delivery — without
+        # this, that shows up as audibly inconsistent volume across the dub
+        # (a real, reported issue). Emotion-aware so this doesn't flatten
+        # the "whispers"/"angry" dynamics from the classification above.
+        seg.synthesized_audio = loudness.normalize(aligned, emotion=seg_emotion)
         seg.synthesized_sr = backends.tts.sample_rate
 
     log.info("Stage 8/8: mixing" + (" + muxing" if has_video else " (no video to mux into)"))
