@@ -51,7 +51,7 @@ def _build_transcriber(config: DubConfig):
         return FasterWhisperTranscriber(
             model_size=config.models.whisper_model,
             language=config.source_language,
-            proper_nouns=config.proper_nouns,
+            proper_nouns=list(config.glossary.keys()),
         )
     raise ValueError(f"unknown transcribe backend: {name!r}")
 

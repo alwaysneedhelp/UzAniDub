@@ -5,6 +5,8 @@ import logging
 import sys
 from pathlib import Path
 
+import yaml
+
 from dubtool.config import DubConfig
 from dubtool.pipeline import run as run_pipeline
 from dubtool.registry import build_backends
@@ -12,7 +14,7 @@ from dubtool.registry import build_backends
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="dubtool", description="Dub a video into Uzbek, cloning each speaker's voice."
+        prog="dubtool", description="Dub a video into Uzbek."
     )
     p.add_argument("video", type=Path, help="input video file")
     p.add_argument("--target", default="uz", help="target language code (default: uz)")
@@ -38,18 +40,38 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--names", default=None,
-        help="proper nouns (character/place names, etc.) to bias transcription toward and "
-             "protect from mistranslation — matters most for names a generic ASR/MT model has "
-             "never seen, e.g. anime character names. Either a comma-separated list "
-             "(\"Naruto,Sasuke,Sakura\") for a one-off, or a path to a text file (one name per "
-             "line, blank lines and #-comments ignored) so a whole show's cast list can be "
-             "reused across episodes without retyping it every run",
+        help="character/place names to bias transcription toward and preserve verbatim through "
+             "translation — matters most for names a generic ASR/MT model has never seen, e.g. "
+             "anime character names. Either a comma-separated list (\"Naruto,Sasuke,Sakura\") "
+             "for a one-off, or a path to a text file (one name per line, blank lines and "
+             "#-comments ignored) so a whole show's cast list can be reused across episodes "
+             "without retyping it every run. Each name is added to the glossary as an identity "
+             "entry (passes through unchanged) — for terms that should be *translated* to a "
+             "fixed rendering instead, use --glossary",
+    )
+    p.add_argument(
+        "--glossary", type=Path, default=None,
+        help="path to a YAML file of {source term: fixed target translation} pairs, enforced "
+             "consistently on every occurrence instead of leaving it to the translation model's "
+             "own per-call judgment (which has no memory across segments and can render the "
+             "same recurring term two different ways). A name that should pass through "
+             "unchanged is just an entry mapping to itself. See assets/jjk_glossary.yaml for an "
+             "example built for Jujutsu Kaisen",
+    )
+    p.add_argument(
+        "--clone-voices", action="store_true",
+        help="clone each speaker's own voice from a reference clip extracted from the source "
+             "audio, instead of using the bundled generic Navoiy TTS reference voice for every "
+             "segment (the default). Real testing found cloned output still reads as more "
+             "\"robotic\" than the bundled voice often enough that it isn't the default, but "
+             "the option remains for anyone who wants per-character voices anyway",
     )
     p.add_argument(
         "--voice-bank-dir", type=Path, default=None,
         help="directory for the persistent cross-run voice bank (default: ./voice_bank) — "
              "lets the same character clone consistently across separate runs (e.g. different "
-             "episodes of a show) instead of each run re-extracting independently",
+             "episodes of a show) instead of each run re-extracting independently. Only takes "
+             "effect with --clone-voices",
     )
     p.add_argument(
         "--no-voice-bank", action="store_true",
@@ -76,6 +98,15 @@ def parse_names(value: str) -> list[str]:
     return [name.strip() for name in value.split(",") if name.strip()]
 
 
+def parse_glossary(path: Path) -> dict[str, str]:
+    """Loads a {source term: fixed target translation} YAML file — see
+    assets/jjk_glossary.yaml for the format."""
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: expected a YAML mapping of {{term: translation}}, got {type(raw).__name__}")
+    return {str(k): str(v) for k, v in raw.items()}
+
+
 def main(argv: list[str] | None = None) -> int:
     from dotenv import load_dotenv
 
@@ -97,7 +128,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.emotion:
         config.tts_emotion = args.emotion
     if args.names:
-        config.proper_nouns = parse_names(args.names)
+        for name in parse_names(args.names):
+            config.glossary[name] = name
+    if args.glossary:
+        config.glossary.update(parse_glossary(args.glossary))
+    if args.clone_voices:
+        config.clone_voices = True
     if args.no_voice_bank:
         config.voice_bank_dir = None
     elif args.voice_bank_dir is not None:

@@ -3,14 +3,13 @@ the plain-function stages (extract/align/mix/mux/reference aren't pluggable —
 they're always ffmpeg/numpy/signal-processing heuristics, not swappable
 models — so they're functions, not backend classes).
 
-This is the step-3 (single-speaker, WITH cloning) state: diarize is still a
-stub that returns one speaker for the whole clip, but that speaker's own
-voice is now cloned from a reference clip extracted from their isolated
-vocal track (see stages/reference.py), falling back to the bundled generic
-default only if extraction fails for some reason. Step 4 swaps the stub
-diarizer for pyannote so `reference_clips` has more than one entry — nothing
-here needs to change for that, which is the point of keeping this behind
-interfaces.py.
+Voice cloning (stages/reference.py, stages/voice_bank.py) is opt-in via
+config.clone_voices, off by default — real testing found the cloned output
+still read as "robotic" often enough that every segment using the one
+bundled generic Navoiy TTS reference voice was judged the better default.
+The cloning machinery itself is untouched; only its call sites here are
+gated. Name/term consistency (stages/glossary.py) is unrelated to cloning
+and always active.
 """
 from __future__ import annotations
 
@@ -26,15 +25,15 @@ from dubtool.stages import (
     auto_names,
     emotion,
     extract,
+    glossary,
     loudness,
     mix,
     mux,
-    proper_nouns,
     reference,
     resegment,
     voice_bank,
 )
-from dubtool.types import DubbingResult, Segment
+from dubtool.types import DubbingResult, ReferenceClip, Segment
 
 log = logging.getLogger("dubtool.pipeline")
 
@@ -85,17 +84,22 @@ def run(
     _validate_speaker_count(diarized_segments, config.num_speakers)
     segments = diarized_segments
 
-    log.info("Stage 4/8: extracting per-speaker reference clips for voice cloning")
-    # Computed from the diarized (coarse) segments' speaker_ids, but *applied*
-    # after transcribe()+resegment() below — both return fresh Segment lists
-    # (re-split at ASR boundaries, then re-split again at sentence
-    # boundaries), which would otherwise silently drop a reference_audio
-    # assigned here. speaker_id survives both re-splits, so keying by
-    # speaker_id and applying it after is what makes this safe.
-    reference_clips = reference.extract_reference_clips(
-        vocals_path, segments, work_dir,
-        raw_audio_path=full_audio, background_path=background_path,
-    )
+    reference_clips: dict[str, ReferenceClip] = {}
+    if config.clone_voices:
+        log.info("Stage 4/8: extracting per-speaker reference clips for voice cloning")
+        # Computed from the diarized (coarse) segments' speaker_ids, but
+        # *applied* after transcribe()+resegment() below — both return fresh
+        # Segment lists (re-split at ASR boundaries, then re-split again at
+        # sentence boundaries), which would otherwise silently drop a
+        # reference_audio assigned here. speaker_id survives both re-splits,
+        # so keying by speaker_id and applying it after is what makes this
+        # safe.
+        reference_clips = reference.extract_reference_clips(
+            vocals_path, segments, work_dir,
+            raw_audio_path=full_audio, background_path=background_path,
+        )
+    else:
+        log.info("Stage 4/8: skipped (voice cloning disabled — using the bundled generic reference voice)")
 
     log.info("Stage 5/8: transcribing (%d speaker segment(s))", len(diarized_segments))
     segments = backends.transcriber.transcribe(vocals_path, diarized_segments)
@@ -107,21 +111,25 @@ def run(
     # worth a second (~30s) transcription pass if it actually found
     # something new; skips it entirely if auto-detection is unavailable
     # (see stages/auto_names.py) or found nothing beyond what was already
-    # explicitly supplied via config.proper_nouns/--names. Re-transcribing
-    # against `diarized_segments` (not the first pass's own output) matters
-    # so speaker-assignment still refers to the real diarized turns, not an
-    # ASR pass standing in for them.
+    # explicitly supplied via config.glossary/--names/--glossary. Re-
+    # transcribing against `diarized_segments` (not the first pass's own
+    # output) matters so speaker-assignment still refers to the real
+    # diarized turns, not an ASR pass standing in for them.
     full_text = " ".join(seg.text for seg in segments)
     detected_names = auto_names.detect_names(full_text)
     new_names = [
         n for n in detected_names
-        if n.lower() not in (p.lower() for p in config.proper_nouns)
+        if n.lower() not in (t.lower() for t in config.glossary)
     ]
     if new_names:
         log.info("auto-detected new name(s), re-transcribing with them as a hint: %s", new_names)
         segments = backends.transcriber.transcribe(vocals_path, diarized_segments, extra_proper_nouns=new_names)
         _validate_has_speech(segments)
-    config.proper_nouns = list(config.proper_nouns) + new_names
+    # An auto-detected name has no known translation, so it's an identity
+    # entry (same mechanism as a manually-supplied --names entry) — see
+    # stages/glossary.py.
+    for name in new_names:
+        config.glossary[name] = name
 
     # Whisper's own segment boundaries aren't sentence-aware and can cut a
     # sentence in half, which measurably hurts translation quality for the
@@ -144,38 +152,46 @@ def run(
         ]
         clip.text = " ".join(w.text for w in overlapping).strip()
 
-    # Cross-run voice consistency: match each of this run's speaker-level
-    # clips against a persistent bank of previously-recognized voices (see
-    # stages/voice_bank.py) so the same character clones from the same
-    # reference across separate dubtool runs (e.g. different episodes),
-    # instead of each run only ever seeing its own file. Only affects the
-    # speaker-level *fallback* clip — per-segment references below are
-    # unaffected, so within-scene emotional variety still comes from each
-    # line's own audio.
-    if config.voice_bank_dir is not None:
-        bank = voice_bank.VoiceBank(config.voice_bank_dir, config.voice_bank_similarity_threshold)
-        for speaker_id, clip in list(reference_clips.items()):
-            score = reference.clip_quality_score(clip.path)
-            reference_clips[speaker_id] = bank.find_or_add(clip.path, clip.text, score)
+    if config.clone_voices:
+        # Cross-run voice consistency: match each of this run's speaker-level
+        # clips against a persistent bank of previously-recognized voices
+        # (see stages/voice_bank.py) so the same character clones from the
+        # same reference across separate dubtool runs (e.g. different
+        # episodes), instead of each run only ever seeing its own file. Only
+        # affects the speaker-level *fallback* clip — per-segment references
+        # below are unaffected, so within-scene emotional variety still
+        # comes from each line's own audio.
+        if config.voice_bank_dir is not None:
+            bank = voice_bank.VoiceBank(config.voice_bank_dir, config.voice_bank_similarity_threshold)
+            for speaker_id, clip in list(reference_clips.items()):
+                score = reference.clip_quality_score(clip.path)
+                reference_clips[speaker_id] = bank.find_or_add(clip.path, clip.text, score)
 
-    # Prefer each segment's *own* original audio as its cloning reference
-    # over the one fixed speaker-level clip above — a single reference
-    # can't represent a character whose delivery actually varies within a
-    # scene (calm menace vs. a shouted attack name, say); the segment's own
-    # audio already has the right register for its own content, so using it
-    # transfers that per-line instead of imposing one moment's style on
-    # every line a speaker has. Falls back to the speaker-level clip (and
-    # from there, the bundled default) when a segment's own audio is too
-    # short or clipped to be a reliable reference on its own.
-    for i, seg in enumerate(segments):
-        own_clip = reference.extract_segment_reference(
-            seg, vocals_path, work_dir / f"segment_ref_{i:03d}_{seg.speaker_id}.wav",
-            raw_audio_path=full_audio, background_path=background_path,
-        )
-        speaker_clip = reference_clips.get(seg.speaker_id)
-        clip = own_clip or speaker_clip
-        seg.reference_audio = clip.path if clip else config.models.default_reference_audio
-        seg.reference_text = clip.text if clip and clip.text else config.models.default_reference_text
+        # Prefer each segment's *own* original audio as its cloning
+        # reference over the one fixed speaker-level clip above — a single
+        # reference can't represent a character whose delivery actually
+        # varies within a scene (calm menace vs. a shouted attack name,
+        # say); the segment's own audio already has the right register for
+        # its own content, so using it transfers that per-line instead of
+        # imposing one moment's style on every line a speaker has. Falls
+        # back to the speaker-level clip (and from there, the bundled
+        # default) when a segment's own audio is too short or clipped to be
+        # a reliable reference on its own.
+        for i, seg in enumerate(segments):
+            own_clip = reference.extract_segment_reference(
+                seg, vocals_path, work_dir / f"segment_ref_{i:03d}_{seg.speaker_id}.wav",
+                raw_audio_path=full_audio, background_path=background_path,
+            )
+            speaker_clip = reference_clips.get(seg.speaker_id)
+            clip = own_clip or speaker_clip
+            seg.reference_audio = clip.path if clip else config.models.default_reference_audio
+            seg.reference_text = clip.text if clip and clip.text else config.models.default_reference_text
+    else:
+        # Voice cloning disabled (the default — see config.clone_voices):
+        # every segment uses the one bundled generic reference voice.
+        for seg in segments:
+            seg.reference_audio = config.models.default_reference_audio
+            seg.reference_text = config.models.default_reference_text
 
     # Classify each segment's likely emotion from its own original audio
     # (see stages/emotion.py) — used below to request a matching delivery
@@ -192,11 +208,11 @@ def run(
         # and the translator needs a real source language to pick the right
         # pivot, not the literal string "auto".
         source_lang = seg.detected_language or config.source_language or "auto"
-        protected_text, name_map = proper_nouns.protect(seg.text, config.proper_nouns)
+        protected_text, term_map = glossary.protect(seg.text, config.glossary)
         translated = backends.translator.translate(
             protected_text, source_lang=source_lang, target_lang=config.target_language
         )
-        seg.translated_text = proper_nouns.restore(translated, name_map)
+        seg.translated_text = glossary.restore(translated, term_map)
         log.debug("  %.2fs-%.2fs: %r -> %r", seg.start, seg.end, seg.text, seg.translated_text)
 
     log.info("Stage 7/8: synthesizing + time-aligning")

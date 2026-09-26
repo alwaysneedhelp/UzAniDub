@@ -73,16 +73,31 @@ class DubConfig:
     voice_bank_dir: Path | None = Path("voice_bank")
     voice_bank_similarity_threshold: float = 0.75
 
-    # Proper nouns (character/place names, etc.) that matter for both
-    # transcription accuracy and translation fidelity — see
-    # transcribe_whisper.py (passed as an ASR initial_prompt to bias
-    # recognition) and stages/proper_nouns.py (kept verbatim through
-    # translation rather than risking mistranslation/mangling by the MT
-    # model). Empty by default; set via `--names` or a config file. Matters
-    # most for content with names an ASR/MT model has never seen — e.g.
-    # anime character names — where a generic model will otherwise
-    # transcribe/translate them into the nearest common word.
-    proper_nouns: list[str] = field(default_factory=list)
+    # Terms (character/place names, show-specific vocabulary, etc.) that
+    # matter for both transcription accuracy and translation consistency —
+    # see transcribe_whisper.py (keys passed as an ASR initial_prompt to
+    # bias recognition) and stages/glossary.py (each occurrence replaced by
+    # a placeholder before translation and swapped back for the glossary's
+    # own fixed rendering afterward, rather than leaving it to the MT
+    # model's per-call judgment). A name that should just pass through
+    # unchanged is an entry mapping to itself (e.g. {"Gojo": "Gojo"}); a
+    # term that has a real target-language rendering maps to it (e.g.
+    # {"Cursed Energy": "La'nat energiyasi"}) — solves both "the MT model
+    # mangles a name it's never seen" and "the same recurring term gets
+    # translated two different ways in two different segments" (MADLAD has
+    # no memory across calls, so nothing else here would catch that drift).
+    # Empty by default; set via `--names`/`--glossary` or a config file.
+    glossary: dict[str, str] = field(default_factory=dict)
+
+    # Off by default: every segment uses the bundled generic reference
+    # voice (models.default_reference_audio/_text) instead of extracting
+    # and cloning each speaker's own voice. Real testing found the cloned
+    # output still read as "robotic" (missing the source speaker's actual
+    # pitch range/dynamics) often enough that a single consistent Navoiy
+    # TTS voice was judged the better default; the cloning machinery
+    # (stages/reference.py, stages/voice_bank.py) is untouched and still
+    # available behind --clone-voices for anyone who wants to opt back in.
+    clone_voices: bool = False
 
     keep_intermediate: bool = False
     # None => pipeline.run() allocates a fresh temp dir per run. Different
