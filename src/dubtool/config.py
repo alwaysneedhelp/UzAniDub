@@ -89,15 +89,19 @@ class DubConfig:
     # Empty by default; set via `--names`/`--glossary` or a config file.
     glossary: dict[str, str] = field(default_factory=dict)
 
-    # Off by default: every segment uses the bundled generic reference
-    # voice (models.default_reference_audio/_text) instead of extracting
-    # and cloning each speaker's own voice. Real testing found the cloned
-    # output still read as "robotic" (missing the source speaker's actual
-    # pitch range/dynamics) often enough that a single consistent Navoiy
-    # TTS voice was judged the better default; the cloning machinery
-    # (stages/reference.py, stages/voice_bank.py) is untouched and still
-    # available behind --clone-voices for anyone who wants to opt back in.
-    clone_voices: bool = False
+    # On by default: each segment clones its speaker's own voice from a
+    # reference clip extracted from the source audio (stages/reference.py),
+    # instead of every segment using one flat bundled generic voice. This
+    # was briefly the non-default behind --clone-voices while chasing a
+    # "robotic"/flat complaint, but the flatness turned out to trace mostly
+    # to stages/emotion.py being too conservative (see there) — most
+    # segments fell back to zero-shot cloning of the bundled *generic*
+    # reference clip's own flat, neutrally-read prosody, regardless of this
+    # flag. With emotion classification now always assigning a real
+    # delivery style, the earlier reasoning for defaulting this off no
+    # longer holds; disable with --no-clone-voices if you specifically
+    # want the single flat bundled voice back (e.g. for speed).
+    clone_voices: bool = True
 
     keep_intermediate: bool = False
     # None => pipeline.run() allocates a fresh temp dir per run. Different

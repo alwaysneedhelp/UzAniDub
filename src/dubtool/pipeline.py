@@ -3,13 +3,13 @@ the plain-function stages (extract/align/mix/mux/reference aren't pluggable —
 they're always ffmpeg/numpy/signal-processing heuristics, not swappable
 models — so they're functions, not backend classes).
 
-Voice cloning (stages/reference.py, stages/voice_bank.py) is opt-in via
-config.clone_voices, off by default — real testing found the cloned output
-still read as "robotic" often enough that every segment using the one
-bundled generic Navoiy TTS reference voice was judged the better default.
-The cloning machinery itself is untouched; only its call sites here are
-gated. Name/term consistency (stages/glossary.py) is unrelated to cloning
-and always active.
+Voice cloning (stages/reference.py, stages/voice_bank.py) is on by
+default via config.clone_voices, disable with --no-clone-voices for the
+one flat bundled generic Navoiy TTS reference voice instead. Name/term
+consistency (stages/glossary.py) is unrelated to cloning and always
+active, as is emotion classification (stages/emotion.py) — see that
+module for why it now always assigns a delivery style rather than only
+for acoustically extreme segments.
 """
 from __future__ import annotations
 
@@ -188,18 +188,20 @@ def run(
             seg.reference_audio = clip.path if clip else config.models.default_reference_audio
             seg.reference_text = clip.text if clip and clip.text else config.models.default_reference_text
     else:
-        # Voice cloning disabled (the default — see config.clone_voices):
-        # every segment uses the one bundled generic reference voice.
+        # --no-clone-voices: every segment uses the one bundled generic
+        # reference voice instead of a per-speaker/per-segment clone.
         for seg in segments:
             seg.reference_audio = config.models.default_reference_audio
             seg.reference_text = config.models.default_reference_text
 
     # Classify each segment's likely emotion from its own original audio
-    # (see stages/emotion.py) — used below to request a matching delivery
-    # style explicitly via inference_instruct2 instead of leaving it purely
-    # to zero-shot's implicit transfer, for segments with a strong enough
-    # acoustic signal to classify confidently. Skipped when the user has
-    # already forced a specific style via --emotion for every segment.
+    # (see stages/emotion.py) — routes almost every segment through
+    # inference_instruct2 with an explicit named delivery style (still
+    # cloning voice *identity* from seg.reference_audio set above) rather
+    # than zero-shot, which turned out to be the actual source of "flat"
+    # output, not voice cloning itself — see stages/emotion.py. Skipped
+    # when the user has already forced one specific style via --emotion
+    # for every segment.
     detected_emotions: dict[int, str] = {} if config.tts_emotion else emotion.classify_segments(segments, vocals_path)
 
     log.info("Stage 6/8: translating %d segment(s) to %s", len(segments), config.target_language)
@@ -225,9 +227,11 @@ def run(
     for i, seg in enumerate(segments):
         ref, ref_text = seg.reference_audio, seg.reference_text
         # Explicit --emotion always wins; otherwise use this segment's own
-        # detected emotion (if confidently classified) to request a
-        # matching delivery via inference_instruct2, else None (zero-shot,
-        # natural prosody from the reference clip).
+        # detected emotion to request a matching delivery via
+        # inference_instruct2 (almost always available — see
+        # stages/emotion.py), else None (zero-shot, natural prosody from
+        # the reference clip; only reached when the segment had no usable
+        # pitch signal at all, e.g. near-silent).
         seg_emotion = config.tts_emotion or detected_emotions.get(i)
 
         # Pass 1: natural pace, just to measure how long this text actually

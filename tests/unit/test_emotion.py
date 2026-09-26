@@ -43,8 +43,10 @@ def test_loud_high_pitched_segment_is_not_classified_as_the_calm_baseline(tmp_pa
 
     assert 3 in result
     assert result[3] in ("happy", "surprised")
-    # baseline-ish segments shouldn't get flagged as strongly emotional
-    assert 0 not in result
+    # baseline-ish segments get the neutral preset, not a strong emotion --
+    # but they're still classified (routed through instruct2), not left
+    # out entirely for zero-shot to handle (see stages/emotion.py).
+    assert result[0] == "calm"
 
 
 def test_quiet_segment_is_classified_as_whispers(tmp_path):
@@ -62,7 +64,7 @@ def test_quiet_segment_is_classified_as_whispers(tmp_path):
     assert result.get(2) == "whispers"
 
 
-def test_uniform_delivery_produces_no_strong_classifications(tmp_path):
+def test_uniform_delivery_is_classified_as_calm(tmp_path):
     sr = 16000
     tones = [(150, 0.3, 2.0)] * 4
     vocals_path = tmp_path / "vocals.wav"
@@ -70,14 +72,29 @@ def test_uniform_delivery_produces_no_strong_classifications(tmp_path):
 
     result = classify_segments(segments, vocals_path)
 
-    assert result == {}
+    assert result == {0: "calm", 1: "calm", 2: "calm", 3: "calm"}
+
+
+def test_silent_segment_is_left_unclassified(tmp_path):
+    # no usable pitch signal at all -- the one remaining case that should
+    # fall back to zero-shot rather than get an explicit style.
+    sr = 16000
+    tones = [(150, 0.3, 2.0), (150, 0.3, 2.0), (0, 0.0, 2.0)]
+    vocals_path = tmp_path / "vocals.wav"
+    segments = _build_vocals(tones, sr, vocals_path)
+
+    result = classify_segments(segments, vocals_path)
+
+    assert 2 not in result
 
 
 def test_keeps_speakers_independent(tmp_path):
     sr = 16000
     # speaker A: consistently loud; speaker B: consistently quiet.
-    # Neither should be flagged just for being naturally louder/quieter
-    # than the other -- baselines are per-speaker.
+    # Neither should be flagged as strongly emotional just for being
+    # naturally louder/quieter than the other -- baselines are per-speaker,
+    # so both should land on the neutral "calm" preset, not e.g. "angry"/
+    # "whispers" from comparing across speakers.
     segments = [
         Segment(start=0.0, end=2.0, speaker_id="A"),
         Segment(start=2.0, end=4.0, speaker_id="B"),
@@ -96,4 +113,4 @@ def test_keeps_speakers_independent(tmp_path):
 
     result = classify_segments(segments, vocals_path)
 
-    assert result == {}
+    assert result == {0: "calm", 1: "calm", 2: "calm", 3: "calm"}

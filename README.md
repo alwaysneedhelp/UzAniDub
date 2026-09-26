@@ -29,10 +29,13 @@ documentary), with known rough edges: MADLAD occasionally hallucinates on
 a specific input line rather than mistranslating it, and per-segment
 timing correction sometimes has to trade off accepting timing drift
 against distorting the voice further (see `config.py` for the full
-reasoning). Voice cloning per speaker exists but is **off by default** —
-real testing found the bundled generic Uzbek voice sounded more natural
-than the cloned output often enough that it's not the default; pass
-`--clone-voices` to opt back in.
+reasoning). Voice cloning per speaker is **on by default** (each segment
+clones its speaker's own voice from the source audio, see `--no-clone-voices`
+to disable); it's combined with acoustic emotion classification
+(`stages/emotion.py`) so nearly every segment also gets an explicit
+delivery style instead of a flat, generic reading — see
+[Emotion](#emotion) below for why that combination, specifically, turned
+out to matter.
 
 ## Install
 
@@ -65,7 +68,8 @@ echo "HF_TOKEN=hf_your_token_here" > .env
 
 Without a token, dubtool falls back to treating the whole clip as one
 speaker — everything still works, it just won't distinguish speakers for
-per-speaker features (only relevant if you also use `--clone-voices`).
+per-speaker features like voice cloning (every line clones from the same
+one detected "speaker" instead of per-character).
 
 ## Usage
 
@@ -85,10 +89,10 @@ Writes the dubbed video to `output/<input filename>` by default.
 | `--num-speakers N` | Hint the diarizer with a known speaker count |
 | `--names NAMES` | Character/place names to bias transcription toward and keep verbatim through translation. Either `"Naruto,Sasuke,Sakura"` or a path to a file, one name per line (see `assets/example_character_names.txt`) |
 | `--glossary PATH` | YAML file of `{source term: fixed Uzbek translation}` pairs, enforced consistently on every occurrence — see [Glossary](#glossary) below |
-| `--clone-voices` | Clone each speaker's own voice instead of using the bundled generic voice for every line (off by default — see [Status](#status)) |
-| `--voice-bank-dir PATH` | Directory for the persistent cross-run voice bank, only relevant with `--clone-voices` (default: `./voice_bank`) |
+| `--no-clone-voices` | Use the bundled generic voice for every line instead of cloning each speaker's own voice (cloning is on by default — see [Status](#status)) |
+| `--voice-bank-dir PATH` | Directory for the persistent cross-run voice bank, only relevant with voice cloning enabled (default: `./voice_bank`) |
 | `--no-voice-bank` | Disable the persistent voice bank for this run |
-| `--emotion NAME` | Force one TTS delivery style for every segment instead of following each segment's own detected/cloned prosody |
+| `--emotion NAME` | Force one TTS delivery style for every segment instead of each segment's own acoustically-detected style (see [Emotion](#emotion)) |
 | `--keep-intermediate` | Keep extracted audio, separated tracks, etc. for debugging |
 | `-v, --verbose` | Debug-level logging |
 
@@ -123,6 +127,27 @@ dubtool episode1.mp4 --glossary assets/jjk_glossary.yaml
 `--names` is a shortcut for glossary entries that should just pass
 through unchanged (no fixed translation needed) — both flags write into
 the same underlying glossary and can be combined.
+
+## Emotion
+
+Each segment's own original audio is scored for pitch/energy relative to
+its speaker's own baseline elsewhere in the file (`stages/emotion.py`),
+and routed into CosyVoice2's `inference_instruct2` with a matching named
+delivery style (calm, happy, sad, angry, surprised, whispers) — the
+cloned reference clip (see above) still supplies voice *identity* in that
+same call, so this isn't an either/or against cloning.
+
+Earlier, only acoustically extreme segments got an explicit style; a
+near-baseline segment fell back to `inference_zero_shot` (implicit,
+"natural" prosody transfer from the reference clip) instead. That
+produced consistently flat/robotic output even with a real, expressive
+per-segment reference clip — the navoiy-tts checkpoint was fine-tuned
+mainly on discrete named emotion presets, not on zero-shot delivery
+transfer, so zero-shot was the actual weak link, not voice cloning
+itself. Now nearly every segment gets classified (near-baseline delivery
+maps to `calm` rather than nothing), so instruct2 handles almost
+everything; zero-shot is only reached when a segment has no usable pitch
+signal at all (near-silent/unvoiced).
 
 ## Slang/idiom normalization
 

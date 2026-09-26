@@ -59,19 +59,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
              "example built for Jujutsu Kaisen",
     )
     p.add_argument(
-        "--clone-voices", action="store_true",
-        help="clone each speaker's own voice from a reference clip extracted from the source "
-             "audio, instead of using the bundled generic Navoiy TTS reference voice for every "
-             "segment (the default). Real testing found cloned output still reads as more "
-             "\"robotic\" than the bundled voice often enough that it isn't the default, but "
-             "the option remains for anyone who wants per-character voices anyway",
+        "--no-clone-voices", action="store_true",
+        help="use the bundled generic Navoiy TTS reference voice for every segment instead of "
+             "cloning each speaker's own voice from a reference clip extracted from the source "
+             "audio (cloning is the default). Faster and simpler, at the cost of every speaker "
+             "sounding the same",
     )
     p.add_argument(
         "--voice-bank-dir", type=Path, default=None,
         help="directory for the persistent cross-run voice bank (default: ./voice_bank) — "
              "lets the same character clone consistently across separate runs (e.g. different "
              "episodes of a show) instead of each run re-extracting independently. Only takes "
-             "effect with --clone-voices",
+             "effect with voice cloning enabled (the default; see --no-clone-voices)",
     )
     p.add_argument(
         "--no-voice-bank", action="store_true",
@@ -132,8 +131,8 @@ def main(argv: list[str] | None = None) -> int:
             config.glossary[name] = name
     if args.glossary:
         config.glossary.update(parse_glossary(args.glossary))
-    if args.clone_voices:
-        config.clone_voices = True
+    if args.no_clone_voices:
+        config.clone_voices = False
     if args.no_voice_bank:
         config.voice_bank_dir = None
     elif args.voice_bank_dir is not None:

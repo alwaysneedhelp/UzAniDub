@@ -1,8 +1,7 @@
 """Classifies each segment's likely emotional delivery from its own
 original audio (pitch/energy relative to the speaker's own baseline
 elsewhere in the file), for routing into CosyVoice2's inference_instruct2
-emotion presets (see backends/tts_cosyvoice.py) instead of leaving delivery
-purely to zero-shot's implicit reference-clip transfer.
+emotion presets (see backends/tts_cosyvoice.py).
 
 Deliberately audio-based, not text-based: a text emotion classifier would
 only work reliably for English source content (breaking the "any source
@@ -14,12 +13,25 @@ language, and was already validated as a real signal — this reuses the
 same pitch-analysis finding that motivated stages/reference.py's
 dynamic-range-aware clip scoring.
 
-This only overrides natural prosody with an explicit instruction when a
-segment's acoustic deviation from *its own speaker's baseline* is strong
-enough to be a confident signal; ambiguous/near-baseline segments are left
-out of the result entirely, so the caller keeps using zero-shot (natural
-reference-clip prosody) rather than risking a wrong classification
-actively degrading a segment that was already delivering fine on its own.
+Earlier versions of this function only returned a classification for
+acoustically extreme segments, leaving near-baseline ones out of the
+result entirely so the caller fell back to zero-shot (cloning the
+reference clip's own prosody directly, no explicit style instruction).
+That turned out to be backwards: real testing kept coming back "flat" or
+"robotic" even with a per-segment reference clip cloned from real,
+expressive source audio — the navoiy-tts checkpoint was fine-tuned mainly
+on a set of discrete named emotion presets (aisha-org/navoiy-tts's
+emotions_40h.json), so *zero-shot* mode — which never got that same
+fine-tuning attention — is the actual weak link, not voice cloning
+itself. This now classifies (almost) every segment into its
+closest-matching preset instead, defaulting near-baseline delivery to
+"calm" rather than leaving it unset, so instruct2 (which the checkpoint
+demonstrably handles well) is used for nearly everything; the reference
+clip passed alongside it still supplies voice *identity* (see
+backends/tts_cosyvoice.py — instruct2 takes reference_audio too), so this
+doesn't trade away cloning, it trades away the zero-shot delivery path
+specifically. A segment is left unclassified only when there's no usable
+pitch signal at all (near-silent, unvoiced, or too short to track).
 """
 from __future__ import annotations
 
@@ -36,10 +48,12 @@ log = logging.getLogger(__name__)
 
 
 def classify_segments(segments: list[Segment], vocals_path: Path) -> dict[int, str]:
-    """Returns {segment_index: emotion_preset_name} for segments whose
-    acoustic profile deviates strongly enough from their speaker's own
-    baseline to warrant an explicit emotion instruction. Segment indices
-    absent from the returned dict should keep using natural prosody.
+    """Returns {segment_index: emotion_preset_name} for (almost) every
+    segment — see the module docstring for why this now classifies nearly
+    everything instead of only acoustically extreme segments. A segment
+    index is absent from the result only when there was no usable pitch
+    signal for it at all (near-silent, unvoiced, or too short to track),
+    in which case the caller should fall back to zero-shot.
 
     Preset names match aisha-org/navoiy-tts's emotions_40h.json tags
     (calm, happy, sad, angry, nervous, surprised, whispers, warm, tired,
@@ -102,15 +116,20 @@ def _pitch_and_energy(data: np.ndarray, sr: int) -> tuple[float, float, float]:
     return float(np.mean(voiced_f0)), float(np.std(voiced_f0)), rms
 
 
-def _classify(pitch_ratio: float, energy_ratio: float) -> str | None:
-    if energy_ratio < 0.5:
+def _classify(pitch_ratio: float, energy_ratio: float) -> str:
+    """Always returns a preset — see the module docstring for why
+    near-baseline delivery now maps to "calm" instead of returning None.
+    Thresholds are moderated from an earlier, stricter version that
+    required a bigger deviation than most real dialogue actually reaches
+    outside of genuinely extreme moments."""
+    if energy_ratio < 0.55:
         return "whispers"
-    if pitch_ratio > 1.5 and energy_ratio > 1.3:
+    if pitch_ratio > 1.4 and energy_ratio > 1.25:
         return "surprised"
-    if pitch_ratio > 1.3 and energy_ratio > 1.2:
+    if pitch_ratio > 1.2 and energy_ratio > 1.1:
         return "happy"
-    if energy_ratio > 1.4 and pitch_ratio <= 1.3:
+    if energy_ratio > 1.3 and pitch_ratio <= 1.2:
         return "angry"
-    if energy_ratio < 0.65 and pitch_ratio < 0.85:
+    if energy_ratio < 0.75 and pitch_ratio < 0.9:
         return "sad"
-    return None  # ambiguous/near-baseline -- let zero-shot handle it
+    return "calm"
