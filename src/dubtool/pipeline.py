@@ -26,6 +26,7 @@ from dubtool.stages import (
     emotion,
     extract,
     glossary,
+    idioms,
     loudness,
     mix,
     mux,
@@ -208,7 +209,11 @@ def run(
         # and the translator needs a real source language to pick the right
         # pivot, not the literal string "auto".
         source_lang = seg.detected_language or config.source_language or "auto"
-        protected_text, term_map = glossary.protect(seg.text, config.glossary)
+        # Rewrite common English slang/idioms into plainer English before
+        # the MT model sees them — see stages/idioms.py for why this is a
+        # cheaper fix than swapping the translation backend entirely.
+        normalized_text = idioms.normalize(seg.text, source_lang)
+        protected_text, term_map = glossary.protect(normalized_text, config.glossary)
         translated = backends.translator.translate(
             protected_text, source_lang=source_lang, target_lang=config.target_language
         )

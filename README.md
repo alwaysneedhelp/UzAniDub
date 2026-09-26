@@ -12,6 +12,7 @@ video (any language)
   -> vocal/background separation (Demucs)
   -> speaker diarization (pyannote, optional)
   -> transcription (faster-whisper)
+  -> English slang/idiom normalization (for English-source segments)
   -> translation to Uzbek (MADLAD-400)
   -> Uzbek speech synthesis (CosyVoice2 + navoiy-tts)
   -> time-alignment + loudness normalization
@@ -122,6 +123,19 @@ dubtool episode1.mp4 --glossary assets/jjk_glossary.yaml
 `--names` is a shortcut for glossary entries that should just pass
 through unchanged (no fixed translation needed) — both flags write into
 the same underlying glossary and can be combined.
+
+## Slang/idiom normalization
+
+MADLAD-400 (like most classic MT models) is trained mostly on formal
+text and mistranslates casual English slang it rarely saw in training —
+"for real" is a real example that came out wrong. Rather than swap the
+whole translation backend for a much heavier LLM (which on this CPU-only
+pipeline would add real per-segment latency, and isn't a guaranteed win
+for Uzbek specifically — see `stages/idioms.py`), English-source segments
+get a cheap normalization pass first that rewrites known slang/idioms
+into plainer English before translation. It's intentionally a small,
+non-exhaustive list — extend `stages/idioms.py` as new mistranslations
+turn up.
 
 ## Config file
 
