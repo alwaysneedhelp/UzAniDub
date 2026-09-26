@@ -33,6 +33,12 @@ restrictions that are easy to miss.
 | [facebook/mms-tts-uzb-script_cyrillic](https://huggingface.co/facebook/mms-tts-uzb-script_cyrillic) | **CC-BY-NC-4.0** | Evaluated during the research phase as a possible Uzbek TTS base for a two-step voice-conversion approach. Not used at all — CosyVoice2 + navoiy-tts (both Apache-2.0) turned out to support voice cloning natively, making this unnecessary. Documented here only so nobody reaches for it later without noticing the license. |
 | [uzlm/sayro-tts-1.7B](https://huggingface.co/uzlm/sayro-tts-1.7B) | Custom "sayro-terms-of-use" (restrictive, no redistribution clarity) | Ruled out during research: no reference-audio voice cloning support (fixed speaker IDs only) and an unclear, non-standard license. Not used anywhere. |
 
+## Cloud APIs used only as opt-in backends
+
+| Service | Terms | Used for | Why not default |
+|---|---|---|---|
+| [Gemini API](https://ai.google.dev/gemini-api/docs) (Google) | Proprietary, paid, governed by [Google's API Terms of Service](https://ai.google.dev/gemini-api/terms) — not an open-weight model, no redistributable license to track | Opt-in translation backend (`backends.translate: gemini`, see `backends/translate_gemini.py`) — better slang/idiom handling than MADLAD-400 (see `stages/idioms.py` for the cheaper default fix) | Every other default backend in this project is a local, permissively-licensed model with no per-run cost, no network dependency, and no third party seeing your content. Gemini is the opposite on all three counts: it costs money per call, requires internet access and a personal API key, and sends the source dialogue text to Google. Fine as an opt-in for someone who's made that tradeoff deliberately; wrong as a default for a tool whose whole design point elsewhere is avoiding exactly this kind of dependency. |
+
 ## Datasets referenced (not currently bundled, relevant for future fine-tuning)
 
 | Dataset | License |
@@ -46,4 +52,6 @@ If you swap in a different backend (via `config.backends`), check its
 license before deploying — this table only covers what dubtool ships with
 by default. In particular, do not swap the translation backend to
 `nllb` in anything you intend to redistribute or run commercially without
-separately clearing that with Meta.
+separately clearing that with Meta, and treat `gemini` as sending your
+source content to a third party (Google) — don't enable it for anything
+sensitive or copyrighted without accounting for that.

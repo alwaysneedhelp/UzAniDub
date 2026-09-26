@@ -76,6 +76,13 @@ def _build_translator(config: DubConfig):
         # that isn't purely personal/research use.
         from dubtool.backends.translate_nllb import NLLBTranslator
         return NLLBTranslator(model_name=config.models.nllb_model)
+    if name == "gemini":
+        # Paid, closed, cloud API — opt-in, not the default. See
+        # backends/translate_gemini.py for why it's worth having anyway
+        # (better slang/idiom handling than MADLAD) and THIRD_PARTY_LICENSES.md
+        # before using it for anything beyond personal/research use.
+        from dubtool.backends.translate_gemini import GeminiTranslator
+        return GeminiTranslator(model_name=config.models.gemini_model)
     raise ValueError(f"unknown translate backend: {name!r}")
 
 

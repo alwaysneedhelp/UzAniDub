@@ -133,7 +133,8 @@ the same underlying glossary and can be combined.
 Each segment's own original audio is scored for pitch/energy relative to
 its speaker's own baseline elsewhere in the file (`stages/emotion.py`),
 and routed into CosyVoice2's `inference_instruct2` with a matching named
-delivery style (calm, happy, sad, angry, surprised, whispers) — the
+delivery style (calm, happy, sad, angry, surprised, whispers, nervous,
+tired) — the
 cloned reference clip (see above) still supplies voice *identity* in that
 same call, so this isn't an either/or against cloning.
 
@@ -161,6 +162,30 @@ get a cheap normalization pass first that rewrites known slang/idioms
 into plainer English before translation. It's intentionally a small,
 non-exhaustive list — extend `stages/idioms.py` as new mistranslations
 turn up.
+
+For a stronger fix than word-swapping, `backends.translate: gemini` in a
+`--config` file switches translation to the Gemini API instead of
+MADLAD-400 — an instruction-following model can be asked directly for a
+natural, idiomatic rendering (slang included) instead of a literal one.
+It's opt-in, not the default: unlike every default backend, it's a paid
+cloud call that needs its own API key and sends the source dialogue to
+Google (see `THIRD_PARTY_LICENSES.md`). Get a key at
+[aistudio.google.com/apikey](https://aistudio.google.com/apikey) and set
+it in `.env`:
+
+```
+GEMINI_API_KEY=...
+```
+
+```yaml
+# config.yaml
+backends:
+  translate: gemini
+```
+
+```bash
+dubtool episode1.mp4 --config config.yaml
+```
 
 ## Config file
 

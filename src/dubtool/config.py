@@ -48,6 +48,9 @@ class ModelPaths:
     opus_mt_en_trk_model: str = "Helsinki-NLP/opus-mt-en-trk"
     opus_mt_mul_en_model: str = "Helsinki-NLP/opus-mt-mul-en"
     nllb_model: str = "facebook/nllb-200-distilled-600M"  # CC-BY-NC-4.0, opt-in only
+    # Paid cloud API, opt-in only (backends["translate"] = "gemini") — needs
+    # a GEMINI_API_KEY, see backends/translate_gemini.py.
+    gemini_model: str = "gemini-2.5-flash"
     demucs_model: str = "htdemucs"
 
 
@@ -197,7 +200,15 @@ class DubConfig:
     def _from_dict(cls, raw: dict[str, Any]) -> "DubConfig":
         raw = dict(raw)
         models_raw = raw.pop("models", {})
+        # `backends` is merged onto the defaults rather than replacing the
+        # dict wholesale -- a config that only wants to override one entry
+        # (e.g. `backends: {translate: gemini}`) shouldn't silently drop
+        # every other key (tts/transcribe/diarize/separate), which would
+        # otherwise surface later as a bare KeyError in registry.py.
+        backends_raw = raw.pop("backends", None)
         cfg = cls(**{k: v for k, v in raw.items() if k != "models"})
+        if backends_raw:
+            cfg.backends = {**cfg.backends, **backends_raw}
         if models_raw:
             cfg.models = ModelPaths(**models_raw)
         _coerce_paths(cfg)

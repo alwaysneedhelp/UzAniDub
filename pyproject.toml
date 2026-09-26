@@ -46,7 +46,12 @@ dependencies = [
   "hydra-core==1.3.2",
   "networkx==3.6.1",
   "pyarrow==18.1.0",
-  "pydantic==2.7.0",
+  # Bumped from 2.7.0 when the optional google-genai dependency (see the
+  # `gemini` extra below) required newer pydantic-core than 2.7.0 allows —
+  # re-verified CosyVoice2 construction *and* a real synthesize() call both
+  # still work fine under 2.13.5 before accepting the bump, same precedent
+  # as the lightning bump above.
+  "pydantic==2.13.5",
   "openai-whisper==20250625",
   "gdown==6.4.0",
   "matplotlib==3.11.2",
@@ -63,9 +68,19 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1"]
+# Opt-in translate backend (backends["translate"] = "gemini") — a paid
+# cloud API, not needed for the default local-model pipeline, so it's not
+# in the unconditional `dependencies` list above.
+gemini = ["google-genai==2.25.0"]
 
 [project.scripts]
 dubtool = "dubtool.cli:main"
+
+[tool.hatch.metadata]
+# en_core_web_sm above is a direct URL dependency (spaCy's model wheels
+# aren't on PyPI) -- hatchling refuses to generate metadata for those
+# unless explicitly allowed.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dubtool"]

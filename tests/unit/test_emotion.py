@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from dubtool.stages.emotion import classify_segments
+from dubtool.stages.emotion import _classify, classify_segments
 from dubtool.types import Segment
 
 
@@ -86,6 +86,25 @@ def test_silent_segment_is_left_unclassified(tmp_path):
     result = classify_segments(segments, vocals_path)
 
     assert 2 not in result
+
+
+def test_shaky_pitch_at_ordinary_energy_is_classified_nervous():
+    assert _classify(pitch_ratio=1.0, energy_ratio=1.0, pitch_std_ratio=2.0) == "nervous"
+
+
+def test_flat_pitch_at_slightly_low_energy_is_classified_tired():
+    assert _classify(pitch_ratio=1.0, energy_ratio=0.8, pitch_std_ratio=0.3) == "tired"
+
+
+def test_level_based_classification_wins_over_variability_signal():
+    # a segment that's both loud/high-pitched (surprised) AND shaky-pitched
+    # should still come out "surprised" -- level-based signals are checked
+    # first and take priority (see _classify's docstring).
+    assert _classify(pitch_ratio=1.6, energy_ratio=1.4, pitch_std_ratio=2.0) == "surprised"
+
+
+def test_ordinary_variability_stays_calm():
+    assert _classify(pitch_ratio=1.0, energy_ratio=1.0, pitch_std_ratio=1.0) == "calm"
 
 
 def test_keeps_speakers_independent(tmp_path):

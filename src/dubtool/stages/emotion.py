@@ -60,6 +60,13 @@ def classify_segments(segments: list[Segment], vocals_path: Path) -> dict[int, s
     sarcastic) — only a subset are reachable from acoustic features alone
     (sarcasm and warmth aren't acoustically distinctive the way loudness or
     pitch spikes are), so this only ever returns from that reachable subset.
+    "nervous" and "tired" are reached via pitch *variability* (how much
+    pitch wavers within the segment, relative to the speaker's own
+    baseline variability) rather than pitch/energy level — a shaky, uneven
+    pitch contour at otherwise-ordinary loudness reads as nervous; an
+    unusually flat, monotone contour at slightly-low energy reads as
+    tired, distinct from "sad" (which requires both low energy *and* a
+    lower-than-usual pitch, not just reduced variability).
     """
     data, sr = sf.read(str(vocals_path), dtype="float32", always_2d=False)
     if data.ndim > 1:
@@ -83,17 +90,20 @@ def classify_segments(segments: list[Segment], vocals_path: Path) -> dict[int, s
             continue  # not enough signal to establish a baseline for this speaker
         baseline_pitch = float(np.median(pitches))
         baseline_rms = float(np.median(rmses))
+        stds = [features[i][1] for i in indices if features[i][0] > 0 and features[i][1] > 0]
+        baseline_pitch_std = float(np.median(stds)) if stds else 0.0
 
         for i in indices:
-            pitch_mean, _pitch_std, rms = features[i]
+            pitch_mean, pitch_std, rms = features[i]
             if pitch_mean <= 0 or baseline_pitch <= 0 or baseline_rms <= 0:
                 continue
-            emotion = _classify(pitch_mean / baseline_pitch, rms / baseline_rms)
+            pitch_std_ratio = (pitch_std / baseline_pitch_std) if baseline_pitch_std > 0 else 1.0
+            emotion = _classify(pitch_mean / baseline_pitch, rms / baseline_rms, pitch_std_ratio)
             if emotion:
                 result[i] = emotion
                 log.debug(
-                    "segment %d (%s): pitch_ratio=%.2f energy_ratio=%.2f -> %s",
-                    i, speaker_id, pitch_mean / baseline_pitch, rms / baseline_rms, emotion,
+                    "segment %d (%s): pitch_ratio=%.2f energy_ratio=%.2f pitch_std_ratio=%.2f -> %s",
+                    i, speaker_id, pitch_mean / baseline_pitch, rms / baseline_rms, pitch_std_ratio, emotion,
                 )
     return result
 
@@ -116,12 +126,14 @@ def _pitch_and_energy(data: np.ndarray, sr: int) -> tuple[float, float, float]:
     return float(np.mean(voiced_f0)), float(np.std(voiced_f0)), rms
 
 
-def _classify(pitch_ratio: float, energy_ratio: float) -> str:
+def _classify(pitch_ratio: float, energy_ratio: float, pitch_std_ratio: float = 1.0) -> str:
     """Always returns a preset — see the module docstring for why
     near-baseline delivery now maps to "calm" instead of returning None.
-    Thresholds are moderated from an earlier, stricter version that
-    required a bigger deviation than most real dialogue actually reaches
-    outside of genuinely extreme moments."""
+    Level-based thresholds (pitch_ratio/energy_ratio) are moderated from an
+    earlier, stricter version that required a bigger deviation than most
+    real dialogue actually reaches outside of genuinely extreme moments;
+    checked before the variability-based nervous/tired branches so a
+    strong level signal always wins over a variability one."""
     if energy_ratio < 0.55:
         return "whispers"
     if pitch_ratio > 1.4 and energy_ratio > 1.25:
@@ -132,4 +144,8 @@ def _classify(pitch_ratio: float, energy_ratio: float) -> str:
         return "angry"
     if energy_ratio < 0.75 and pitch_ratio < 0.9:
         return "sad"
+    if pitch_std_ratio > 1.6 and 0.8 <= energy_ratio <= 1.3:
+        return "nervous"
+    if pitch_std_ratio < 0.6 and 0.75 <= energy_ratio < 0.9:
+        return "tired"
     return "calm"

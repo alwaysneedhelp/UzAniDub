@@ -29,6 +29,23 @@ models:
     assert isinstance(cfg.models.cosyvoice_base_dir, Path)
 
 
+def test_yaml_partial_backends_override_merges_not_replaces(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(
+        """
+backends:
+  translate: gemini
+"""
+    )
+    cfg = DubConfig.from_yaml(yaml_path)
+    assert cfg.backends["translate"] == "gemini"
+    # every other key must survive -- registry.py indexes all of these
+    assert cfg.backends["tts"] == "cosyvoice_navoiy"
+    assert cfg.backends["transcribe"] == "faster_whisper"
+    assert cfg.backends["diarize"] == "auto"
+    assert cfg.backends["separate"] == "demucs"
+
+
 def test_yaml_coerces_string_paths_to_path_objects(tmp_path):
     yaml_path = tmp_path / "config.yaml"
     yaml_path.write_text(
