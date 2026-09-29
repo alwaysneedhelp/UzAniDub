@@ -18,8 +18,15 @@ chunks of meaning and occasionally hallucinating unrelated phrases).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 log = logging.getLogger(__name__)
+LOCAL_MODEL_DIR = Path(__file__).resolve().parents[3] / "poc" / "models" / "madlad400-3b-mt-int8-float32"
+
+
+def local_model_ready() -> bool:
+    return all((LOCAL_MODEL_DIR / name).is_file() for name in
+               ("model.bin", "config.json", "spiece.model", "tokenizer_config.json"))
 
 
 class MadladTranslator:
@@ -37,7 +44,8 @@ class MadladTranslator:
         from huggingface_hub import snapshot_download
 
         log.info("loading MADLAD-400 (CTranslate2 int8) from %s", self._model_name)
-        model_path = snapshot_download(self._model_name)
+        model_path = (str(LOCAL_MODEL_DIR) if local_model_ready() else
+                      snapshot_download(self._model_name, local_dir=LOCAL_MODEL_DIR))
         self._translator = ctranslate2.Translator(model_path, device=self._device)
         self._tokenizer = transformers.T5Tokenizer.from_pretrained(model_path)
 
