@@ -81,6 +81,10 @@ def _build_translator(config: DubConfig):
 
 def _build_tts(config: DubConfig):
     name = config.backends["tts"]
+    if name == "custom":
+        from dubtool.backends.tts_custom import build_custom_tts
+
+        return build_custom_tts(config)
     if name == "cosyvoice_navoiy":
         from dubtool.backends.tts_cosyvoice import CosyVoiceNavoiyTTS
         return CosyVoiceNavoiyTTS(

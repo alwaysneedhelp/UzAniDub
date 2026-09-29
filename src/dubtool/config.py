@@ -23,6 +23,10 @@ class ModelPaths:
     cosyvoice_source_dir: Path = Path("poc/CosyVoice")
     cosyvoice_base_dir: Path = Path("poc/models/CosyVoice2-0.5B")
     navoiy_checkpoint: Path = Path("poc/models/navoiy-tts/emotion_600h_joint.pt")
+    # Import path for a user-supplied TTS factory, e.g. "my_voice:build_tts".
+    # Used only when backends.tts is "custom". The factory receives DubConfig
+    # and returns an object implementing interfaces.TTSBackend.
+    custom_tts_factory: str | None = None
     default_reference_audio: Path = Path("assets/default_reference.wav")
     # Exact transcript of default_reference_audio (generated via macOS `say`
     # — see poc/reference.wav) — known up front since we synthesized it
