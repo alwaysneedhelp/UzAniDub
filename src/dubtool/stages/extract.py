@@ -43,12 +43,21 @@ def has_video_stream(path: Path) -> bool:
     case (podcasts, extracted audio tracks, ...), not just a malformed file,
     so the pipeline needs to know upfront whether there's a video stream to
     mux the dubbed audio back into at all.
+
+    Embedded cover art (an MP3/M4A "attached picture", common in downloaded
+    audio) is reported by ffprobe as a video stream too, but it isn't one we
+    can mux into — treating it as video would turn an audio dub into a
+    still-image MP4 — so those streams are ignored.
     """
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "v",
-        "-show_entries", "stream=index", "-of", "csv=p=0", str(path),
+        "-show_entries", "stream=index:stream_disposition=attached_pic",
+        "-of", "csv=p=0", str(path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe failed inspecting {path}:\n{result.stderr}")
-    return bool(result.stdout.strip())
+    return any(
+        line.strip() and line.strip().split(",")[-1] != "1"
+        for line in result.stdout.splitlines()
+    )
