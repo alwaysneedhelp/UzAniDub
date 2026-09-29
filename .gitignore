@@ -27,3 +27,6 @@ poc/*
 !poc/poc_infer.py
 !poc/reference.wav
 !poc/output_uzbek_cloned.wav
+
+# Local test media dropped in the repo root
+/*.mp3
