@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1790235747789,
+      "tag": "0000_cute_greymalkin",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790360092629,
+      "tag": "0001_pretty_shape",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790655874109,
+      "tag": "0002_episode_media",
+      "breakpoints": true
+    }
+  ]
+}
