@@ -52,3 +52,10 @@ def has_video_stream(path: Path) -> bool:
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe failed inspecting {path}:\n{result.stderr}")
     return bool(result.stdout.strip())
+
+
+def audio_duration(path: Path) -> float:
+    """Length of an audio file in seconds, read from its header."""
+    import soundfile as sf
+
+    return float(sf.info(str(path)).duration)

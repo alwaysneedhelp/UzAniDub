@@ -19,6 +19,8 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
+
 from dubtool.config import DubConfig
 from dubtool.interfaces import Diarizer, Separator, Transcriber, Translator, TTSBackend
 from dubtool.stages import (
@@ -33,6 +35,8 @@ from dubtool.stages import (
     mux,
     reference,
     resegment,
+    takes,
+    timing,
     voice_bank,
 )
 from dubtool.types import DubbingResult, ReferenceClip, Segment
@@ -369,60 +373,83 @@ def run(
         log.debug("  %.2fs-%.2fs: %r -> %r", seg.start, seg.end, seg.text, seg.translated_text)
     backends.release("translator")
 
-    log.info("Stage 7/8: synthesizing + time-aligning")
+    log.info("Stage 7/8: synthesizing + timing")
     sr = backends.tts.sample_rate
+    # Where the source audio ends: the last line's room runs to here.
+    timeline_end = extract.audio_duration(full_audio)
+    stretch_enabled = config.min_stretch_ratio < 1.0 or config.max_stretch_ratio > 1.0
+    previous_end = float("-inf")
+    late_lines, worst_delay = 0, 0.0
     for i, seg in enumerate(segments):
         ref, ref_text = seg.reference_audio, seg.reference_text
         # Explicit --emotion always wins; otherwise use this segment's own
         # detected emotion to request a matching delivery via
-        # inference_instruct2 (almost always available — see
-        # stages/emotion.py), else None (zero-shot, natural prosody from
-        # the reference clip; only reached when the segment had no usable
-        # pitch signal at all, e.g. near-silent).
+        # inference_instruct2 (see stages/emotion.py), else None
+        # (zero-shot, natural prosody from the reference clip).
         seg_emotion = config.tts_emotion or detected_emotions.get(i)
 
-        # Pass 1: natural pace, just to measure how long this text actually
-        # takes to speak. Pass 2: re-synthesize at a native `speed` aimed at
-        # seg.duration directly, so the waveform-domain stretch below only
-        # has a small residual gap to close instead of carrying the whole
-        # correction (see config.py for why — this used to be a single pass
-        # and sounded robotic/over-stretched as a result).
-        natural = backends.tts.synthesize(
-            seg.translated_text, ref, reference_text=ref_text, emotion=seg_emotion
+        # When this line will really start, and how long it has before the
+        # next one is due -- its own slot *plus* the pause after it, which
+        # the old fit-to-own-slot approach never used. See stages/timing.py.
+        start = timing.place(seg.start, previous_end, config.min_line_gap)
+        next_due = segments[i + 1].start if i + 1 < len(segments) else timeline_end
+        available = timing.room(start, next_due)
+
+        # Pass 1 at natural pace measures how long the line wants; pass 2
+        # re-synthesizes at a native speed only when it has to. Speed comes
+        # from CosyVoice2 itself (mel interpolation before vocoding), which
+        # regenerates the speech -- never from stretching finished audio.
+        natural = _synthesize_take(backends.tts, sr, seg, ref, ref_text, seg_emotion)
+        cap = timing.speed_cap(
+            start - seg.start, config.max_native_speed,
+            config.max_catchup_speed, config.catchup_after,
         )
-        natural_duration = len(natural) / sr
-        if natural_duration <= 0:
+        speed = timing.choose_speed(
+            len(natural) / sr, available, seg.duration, config.min_native_speed, cap,
+        )
+        if abs(speed - 1.0) < 0.02:
             raw = natural
         else:
-            native_speed = natural_duration / seg.duration
-            native_speed = max(config.min_native_speed, min(config.max_native_speed, native_speed))
-            if abs(native_speed - 1.0) < 0.02:
-                raw = natural  # already close enough, skip a redundant second pass
-            else:
-                raw = backends.tts.synthesize(
-                    seg.translated_text, ref, reference_text=ref_text,
-                    emotion=seg_emotion, speed=native_speed,
-                )
+            raw = _synthesize_take(backends.tts, sr, seg, ref, ref_text, seg_emotion, speed=speed)
+        if stretch_enabled:
+            # Opt-in only: a phase vocoder is what made lines sound metallic,
+            # so it is off unless a config asks for it for tight lip-sync.
+            raw = align.align_segment(
+                raw, sr, target_duration=seg.duration,
+                min_ratio=config.min_stretch_ratio, max_ratio=config.max_stretch_ratio,
+            )
 
-        aligned = align.align_segment(
-            raw,
-            sr,
-            target_duration=seg.duration,
-            min_ratio=config.min_stretch_ratio,
-            max_ratio=config.max_stretch_ratio,
-        )
         # CosyVoice2 renders each segment independently and its output level
         # varies noticeably line to line even for similar delivery — without
         # this, that shows up as audibly inconsistent volume across the dub
         # (a real, reported issue). Emotion-aware so this doesn't flatten
         # the "whispers"/"angry" dynamics from the classification above.
-        seg.synthesized_audio = loudness.normalize(aligned, emotion=seg_emotion)
+        seg.synthesized_audio = loudness.normalize(raw, emotion=seg_emotion)
         seg.synthesized_sr = sr
+        seg.placed_start = start
+        spoken = len(raw) / sr
+        previous_end = start + spoken
+
+        delay = start - seg.start
+        if delay > 0.05:
+            late_lines += 1
+            worst_delay = max(worst_delay, delay)
+        log.info(
+            "line %d at %.2fs%s: %.2fs spoken in %.2fs of room at %.2fx (%s)",
+            i, start, f" (+{delay:.2f}s, waited for the previous line)" if delay > 0.05 else "",
+            spoken, available, speed, seg_emotion or "zero-shot",
+        )
+    if late_lines:
+        log.info(
+            "%d of %d lines started late to let the line before finish; worst delay %.2fs",
+            late_lines, len(segments), worst_delay,
+        )
     backends.release("tts")
 
     log.info("Stage 8/8: mixing" + (" + muxing" if has_video else " (no video to mux into)"))
     final_audio = mix.mix_segments(
-        segments, background_path, work_dir / "final_audio.wav", sample_rate=sr
+        segments, background_path, work_dir / "final_audio.wav", sample_rate=sr,
+        min_gap=config.min_line_gap,
     )
     if has_video:
         mux.mux(video_path, final_audio, output_path)
@@ -434,6 +461,52 @@ def run(
         _cleanup(work_dir, keep={final_audio})
 
     return DubbingResult(output_video=actual_output, segments=segments, intermediate_dir=work_dir if config.keep_intermediate else None)
+
+
+def _synthesize_take(
+    tts: TTSBackend,
+    sr: int,
+    seg: Segment,
+    reference_audio: Path,
+    reference_text: str,
+    emotion: str | None,
+    speed: float = 1.0,
+    attempts: int = 3,
+) -> np.ndarray:
+    """Synthesize a line, re-rolling a take that contains no speech.
+
+    The last attempt drops a non-calm preset back to calm: the broken take
+    measured on real output was an emotional preset on a two-word line, and
+    a plainer reading is better than a line that plays as noise. If every
+    attempt fails, the most speech-like one is used (see stages/takes.py).
+    """
+    best, best_score = None, (-1.0, -1.0)
+    for attempt in range(attempts):
+        style = emotion
+        if attempt == attempts - 1 and emotion not in (None, "calm", "whispers"):
+            style = "calm"
+        audio = tts.synthesize(
+            seg.translated_text, reference_audio, reference_text=reference_text,
+            emotion=style, speed=speed,
+        )
+        usable, voiced = takes.is_usable(audio, sr, style)
+        if usable:
+            if attempt:
+                log.info("%.2fs: take %d is clean (%.0f%% voiced, %s)",
+                         seg.start, attempt + 1, voiced * 100, style or "zero-shot")
+            return audio
+        log.warning(
+            "%.2fs: take %d of %r has almost no speech (%.0f%% voiced); re-rolling",
+            seg.start, attempt + 1, seg.translated_text[:40], voiced * 100,
+        )
+        # Ties on voicing go to the take with sound in it: an unvoiced take
+        # is often breathy speech, which beats a line that vanishes.
+        score = (voiced, float(np.sqrt(np.mean(audio.astype(np.float64) ** 2))) if len(audio) else 0.0)
+        if score > best_score:
+            best, best_score = audio, score
+    log.warning("%.2fs: no clean take in %d attempts; using the best (%.0f%% voiced)",
+                seg.start, attempts, best_score[0] * 100)
+    return best
 
 
 def _borrow_nearest_human_reference(segments: list[Segment], default_audio: Path) -> None:

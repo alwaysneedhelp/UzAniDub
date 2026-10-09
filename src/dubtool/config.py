@@ -114,45 +114,35 @@ class DubConfig:
     # want a fixed, predictable location.
     work_dir: Path | None = None
 
-    # Timing correction happens in two stages now, not one — real testing
-    # showed a single waveform-domain phase-vocoder pass (align.py alone)
-    # sounded "robotic" and "too stretched" even after max_stretch_ratio was
-    # already lowered from 2.0 to 1.25, because that one stage was carrying
-    # the *entire* duration-correction burden:
-    #
-    #   1. pipeline.py synthesizes each segment once at speed=1.0 to measure
-    #      its natural duration, then re-synthesizes at a computed native
-    #      `speed` (clamped to [min_native_speed, max_native_speed]) using
-    #      the TTS backend's own synthesis-time speed control where it has
-    #      one (e.g. mel-spectrogram interpolation ahead of vocoding) —
-    #      this does most of the work and is typically much less
-    #      artifact-prone than stretching a finished waveform.
-    #   2. align.py's waveform-domain phase-vocoder stretch then only needs
-    #      to close whatever small gap remains, bounded tightly by
-    #      [min_stretch_ratio, max_stretch_ratio] — outside that range we
-    #      accept timing drift (the dubbed segment ends early/late relative
-    #      to the original) rather than distort the voice further.
-    #
-    # min/max_stretch_ratio are therefore much tighter than before (used to
-    # bound the *entire* correction; now only the small residual after step
-    # 1).
-    #
-    # Both sets of bounds were tightened further after real anime-dialogue
-    # testing still sounded "stretchy" even under the two-pass scheme: 4 of
-    # 5 segments in that run hit a clamp, and with the old bounds
-    # (0.7-1.5 native, 0.9-1.1 residual) a segment needing heavy correction
-    # could still end up ~1.5x*1.1x ≈ 1.65x off natural pace in the worst
-    # case — both stages maxed out simultaneously, compounding their
-    # artifacts. Dramatic/expressive delivery (anime dialogue, unlike calm
-    # narration) makes even a "modest" 10-50% stretch read as audibly
-    # unnatural. Tightened to prioritize accepting timing drift over
-    # distorting the voice much more aggressively than before — this is a
-    # real tradeoff, not a free lunch: expect more segments to end early/
-    # late relative to the original now.
-    min_native_speed: float = 0.85
-    max_native_speed: float = 1.2
-    min_stretch_ratio: float = 0.95
-    max_stretch_ratio: float = 1.05
+    # Timing. History, because each step was a response to real output:
+    # a single phase-vocoder pass sounded stretched; splitting the work into
+    # a TTS-native speed pass plus a small phase-vocoder residual still put
+    # nearly every line through the vocoder, and lines that didn't fit their
+    # own slot were cut off mid-word in mix.py -- 13 of 16 on a real clip.
+    # The current scheme (stages/timing.py) never truncates: a line gets its
+    # slot plus the pause after it, speeds up only via the TTS, and if it
+    # still runs long the next line waits.
+    # Speed is now chosen against the room a line really has -- its slot plus
+    # the pause after it -- and anything that still doesn't fit makes the
+    # next line wait rather than getting cut off (stages/timing.py). So the
+    # speed range can be gentle: 1.25x is about where CosyVoice2's mel-domain
+    # speed-up starts sounding rushed, and below 0.9x it starts to drawl.
+    min_native_speed: float = 0.9
+    max_native_speed: float = 1.25
+    # Once a line starts more than catchup_after seconds late, it may be
+    # spoken up to max_catchup_speed so the lag shrinks (stages/timing.py).
+    max_catchup_speed: float = 1.4
+    catchup_after: float = 0.3
+    # Waveform time-stretching is off: both bounds at 1.0. It ran nearly
+    # every line through a phase vocoder for at most a 5% timing gain, and
+    # phase-vocoder artifacts are the metallic quality that read as
+    # "robotic". Widen these only for lip-sync-critical content, knowing the
+    # cost. Kept as knobs so an existing YAML that sets them still loads.
+    min_stretch_ratio: float = 1.0
+    max_stretch_ratio: float = 1.0
+    # Silence kept between two lines when one has to wait for the other, so
+    # back-to-back lines from different characters don't run together.
+    min_line_gap: float = 0.08
 
     # None (the default) means: don't force a delivery style, clone the
     # reference speaker's own natural prosody instead (see
