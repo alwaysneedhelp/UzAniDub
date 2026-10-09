@@ -293,6 +293,7 @@ def run(
         # back to the speaker-level clip (and from there, the bundled
         # default) when a segment's own audio is too short or clipped to be
         # a reliable reference on its own.
+        montages: dict[str, ReferenceClip | None] = {}
         for i, seg in enumerate(segments):
             own_clip = reference.extract_segment_reference(
                 seg, vocals_path, work_dir / f"segment_ref_{i:03d}_{seg.speaker_id}.wav",
@@ -306,9 +307,22 @@ def run(
                 pad_bounds=_same_speaker_bounds(segments, i),
             )
             speaker_clip = reference_clips.get(seg.speaker_id)
+            if own_clip is None and speaker_clip is None:
+                # Neither this line nor one contiguous stretch of this
+                # speaker is long enough on its own: join all of their lines
+                # rather than fall through to the bundled default, which is
+                # a synthetic macOS voice (see reference.speaker_montage).
+                if seg.speaker_id not in montages:
+                    montages[seg.speaker_id] = reference.speaker_montage(
+                        seg.speaker_id, segments, vocals_path,
+                        work_dir / f"montage_{seg.speaker_id}.wav",
+                        raw_audio_path=full_audio, background_path=background_path,
+                    )
+                speaker_clip = montages[seg.speaker_id]
             clip = own_clip or speaker_clip
             seg.reference_audio = clip.path if clip else config.models.default_reference_audio
             seg.reference_text = clip.text if clip and clip.text else config.models.default_reference_text
+        _borrow_nearest_human_reference(segments, config.models.default_reference_audio)
     else:
         # --no-clone-voices: every segment uses the one bundled generic
         # reference voice instead of a per-speaker/per-segment clone.
@@ -420,6 +434,32 @@ def run(
         _cleanup(work_dir, keep={final_audio})
 
     return DubbingResult(output_video=actual_output, segments=segments, intermediate_dir=work_dir if config.keep_intermediate else None)
+
+
+def _borrow_nearest_human_reference(segments: list[Segment], default_audio: Path) -> None:
+    """Last resort before the bundled default voice: a line whose speaker has
+    no usable audio at all clones the nearest line that does.
+
+    That may be the wrong character, which is why it is the last step. But
+    a speaker this short of audio is almost always a fragment diarization
+    split off from a neighbour, and the alternative is the bundled reference
+    -- a synthetic macOS voice, which is wrong for *every* character and
+    makes the line sound like a screen reader."""
+    human = [i for i, seg in enumerate(segments) if seg.reference_audio != default_audio]
+    if not human:
+        return
+    for i, seg in enumerate(segments):
+        if seg.reference_audio != default_audio:
+            continue
+        nearest = min(human, key=lambda j: abs(segments[j].start - seg.start))
+        donor = segments[nearest]
+        log.warning(
+            "%.2fs (%s): no usable audio of this speaker; cloning the nearest real voice "
+            "(%.2fs, %s) instead of the bundled synthetic one",
+            seg.start, seg.speaker_id, donor.start, donor.speaker_id,
+        )
+        seg.reference_audio = donor.reference_audio
+        seg.reference_text = donor.reference_text
 
 
 def _same_speaker_bounds(segments: list[Segment], index: int) -> tuple[float, float]:

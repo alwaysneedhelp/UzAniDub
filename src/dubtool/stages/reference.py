@@ -48,7 +48,8 @@ def extract_reference_clips(
     (with `.text` left empty — the caller fills it in once transcription
     data covering the clip's time range is available); a speaker with no
     window of at least `min_duration` clean seconds is omitted — the caller
-    falls back to the bundled default reference voice for them.
+    then clones their lines from their own audio, or from speaker_montage(),
+    before ever reaching the bundled default voice.
 
     If `raw_audio_path` and `background_path` are both given and the
     background track's energy in the chosen window is low relative to the
@@ -93,10 +94,10 @@ def extract_reference_clips(
     for speaker_id, speaker_segments in by_speaker.items():
         window = _best_window(data, sr, speaker_segments, target_duration, min_duration, hop)
         if window is None:
-            log.warning(
-                "not enough clean speech to build a reference clip for %s; "
-                "falling back to the default reference voice for them",
-                speaker_id,
+            log.info(
+                "no single %.0fs+ stretch of %s to use as their reference clip; their "
+                "lines will clone from their own audio, or all of their lines joined",
+                min_duration, speaker_id,
             )
             continue
         clip_data, start_sample = window
@@ -298,3 +299,75 @@ def _dynamic_range(window: np.ndarray, frame_len: int) -> float:
     if len(frame_rms) < 2 or np.mean(frame_rms) == 0:
         return 0.0
     return float(np.std(frame_rms) / np.mean(frame_rms))
+
+
+def speaker_montage(
+    speaker_id: str,
+    segments: list[Segment],
+    vocals_path: Path,
+    out_path: Path,
+    raw_audio_path: Path | None = None,
+    background_path: Path | None = None,
+    min_duration: float = 0.6,
+    max_duration: float = 10.0,
+    gap: float = 0.08,
+    background_energy_ratio: float = 0.1,
+) -> ReferenceClip | None:
+    """Every line one speaker has, joined end to end into one reference.
+
+    The fallback below a speaker's own clips and above the bundled default
+    voice. extract_reference_clips() needs one *contiguous* window of 4s+,
+    and extract_segment_reference() needs 1.5s from a single line, so a
+    character whose lines are all short got neither -- and fell through to
+    assets/default_reference.wav, which is macOS `say` output. On a real
+    clip that was 4 of 16 lines cloned from a robot voice: the single most
+    direct cause of a dub sounding "like Google Translate". Their own
+    scattered lines, joined, are the right voice and real human timbre.
+
+    Each line comes from the raw pre-separation audio where Demucs had
+    little to remove there, for the same reason extract_reference_clips()
+    does: cloning copies a separation artifact into every line it voices.
+    """
+    data, sr = sf.read(str(vocals_path), dtype="float32", always_2d=False)
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    raw = bg = None
+    if raw_audio_path is not None and background_path is not None:
+        bg_data, bg_sr = sf.read(str(background_path), dtype="float32", always_2d=False)
+        raw_data, raw_sr = sf.read(str(raw_audio_path), dtype="float32", always_2d=False)
+        if bg_sr == sr and raw_sr == sr:
+            bg = bg_data.mean(axis=1) if bg_data.ndim > 1 else bg_data
+            raw = raw_data.mean(axis=1) if raw_data.ndim > 1 else raw_data
+
+    pieces: list[np.ndarray] = []
+    texts: list[str] = []
+    total = 0
+    mine = sorted((s for s in segments if s.speaker_id == speaker_id), key=lambda s: s.start)
+    for seg in mine:
+        a, b = max(0, int(seg.start * sr)), min(len(data), int(seg.end * sr))
+        if b <= a:
+            continue
+        piece = data[a:b]
+        if raw is not None and b <= len(raw) and b <= len(bg):
+            vocal_rms = float(np.sqrt(np.mean(piece**2)))
+            bg_rms = float(np.sqrt(np.mean(bg[a:b] ** 2)))
+            if vocal_rms > 0 and bg_rms < background_energy_ratio * vocal_rms:
+                piece = raw[a:b]
+        if float(np.abs(piece).max()) > 0.99:
+            continue  # clipped: unreliable as a voice sample
+        pieces.append(piece)
+        texts.append(seg.text)
+        total += len(piece)
+        if total >= int(max_duration * sr):
+            break
+
+    if total < int(min_duration * sr):
+        return None
+    silence = np.zeros(int(gap * sr), dtype=np.float32)
+    joined = np.concatenate([part for piece in pieces for part in (piece, silence)][:-1])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out_path), joined, sr)
+    return ReferenceClip(
+        path=out_path, start=mine[0].start, end=mine[-1].end,
+        text=" ".join(t for t in texts if t).strip(),
+    )
