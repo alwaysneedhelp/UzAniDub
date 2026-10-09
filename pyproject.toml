@@ -16,6 +16,16 @@ requires-python = ">=3.11"
 # numpy==2.4.6 despite torch/transformers historically preferring the 1.x
 # line: this venv proved CosyVoice2 + the rest of the stack works fine
 # against it, so it's pinned as verified rather than downgraded on spec.
+#
+# onnxruntime must stay >=1.20 to hold that numpy pin. 1.18.0 (what
+# CosyVoice2's own requirements.txt asks for, alongside numpy==1.26.4) is
+# built against the numpy 1.x C ABI and dies on import under numpy 2 with
+# "AttributeError: _ARRAY_API not found". It appeared to work only because
+# poc/.venv had numpy installed twice -- 1.26.4 left in place underneath
+# 2.4.6's metadata -- so the old ABI was still on disk there. A venv built
+# cleanly from this file got the real numpy 2.4.6 and could not import the
+# TTS backend at all. Verified end to end on 1.31.0 + numpy 2.4.6.
+#
 # lightning was bumped 2.2.4->2.6.6 by installing pyannote.audio, which
 # requires a newer lightning than CosyVoice2's own stack was verified
 # against — re-verified CosyVoice2 construction *and* synthesis both still
@@ -37,7 +47,7 @@ dependencies = [
   "diffusers==0.29.0",
   "lightning==2.6.6",
   "HyperPyYAML==1.2.3",
-  "onnxruntime==1.18.0",
+  "onnxruntime==1.31.0",  # >=1.20 required for the numpy 2 ABI; see note above
   "inflect==7.3.1",
   "x-transformers==2.11.24",
   "wetext==0.0.4",
