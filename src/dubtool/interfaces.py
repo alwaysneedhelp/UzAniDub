@@ -53,12 +53,27 @@ class Transcriber(Protocol):
 
 
 class Translator(Protocol):
-    def translate(self, text: str, source_lang: str, target_lang: str) -> str: ...
+    def translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        target_duration: float | None = None,
+    ) -> str: ...
 
 
 class TTSBackend(Protocol):
     """Synthesizes speech in the target language, optionally cloning a voice
     from a short reference clip."""
+
+    # False for the classic NMT backends (MADLAD/OPUS-MT/NLLB), which are
+    # trained on formal parallel text and read slang literally -- pipeline
+    # runs stages/idioms.py over their input to compensate. True for an
+    # instruction-following backend that is *asked* for idiomatic output:
+    # pre-flattening its input would throw away the register it is there to
+    # preserve, and replacement text chosen to survive a literal model is
+    # strictly worse input than the original line.
+    handles_idioms: bool = False
 
     sample_rate: int
 

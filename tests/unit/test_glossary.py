@@ -64,3 +64,26 @@ def test_empty_glossary():
 
 def test_restore_with_empty_mapping_is_a_no_op():
     assert restore("some text", {}) == "some text"
+
+
+def test_restores_a_placeholder_whose_letters_came_back_altered():
+    # An instruction-following backend treats the sentinel as text to rewrite
+    # and returns it a letter short. Observed on real Gemini output as
+    # "XPRSERVEDTERM40X", which an exact replace left in the finished line
+    # for the TTS to read aloud. Only the digits are dependable.
+    protected, mapping = protect(
+        "He used the Reverse Cursed Technique.",
+        {"Reverse Cursed Technique": "Teskari la'nat texnikasi"},
+    )
+    mangled = protected.replace("XPRESERVEDTERM", "XPRSERVEDTERM")
+    assert mangled != protected          # guard: the test is exercising the bug
+    assert "Teskari la'nat texnikasi" in restore(mangled, mapping)
+    assert "SERVEDTERM" not in restore(mangled, mapping)
+
+
+def test_leaves_an_unknown_placeholder_like_token_alone():
+    # Don't rewrite something that merely looks like a sentinel but has no
+    # entry -- the index has to actually be one we issued.
+    text = "Model X100X is unrelated."
+    _, mapping = protect("nothing here", {"Gojo": "Gojo"})
+    assert restore(text, mapping) == text

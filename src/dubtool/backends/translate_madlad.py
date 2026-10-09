@@ -41,7 +41,15 @@ class MadladTranslator:
         self._translator = ctranslate2.Translator(model_path, device=self._device)
         self._tokenizer = transformers.T5Tokenizer.from_pretrained(model_path)
 
-    def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+    def translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        target_duration: float | None = None,
+    ) -> str:
+        # target_duration is accepted and ignored: a seq2seq NMT model has no length control to offer.
+        # Only an instruction-following backend can be asked to fit a slot.
         if not text.strip():
             return ""
         self._ensure_loaded()

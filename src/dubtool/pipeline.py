@@ -328,11 +328,21 @@ def run(
         source_lang = seg.detected_language or config.source_language or "auto"
         # Rewrite common English slang/idioms into plainer English before
         # the MT model sees them — see stages/idioms.py for why this is a
-        # cheaper fix than swapping the translation backend entirely.
-        normalized_text = idioms.normalize(seg.text, source_lang)
+        # cheaper fix than swapping the translation backend entirely. Skipped
+        # for a backend that handles idioms itself: the replacements are
+        # worded to survive a literal NMT model, which makes them worse input
+        # than the original line for a model being asked for natural speech.
+        if getattr(backends.translator, "handles_idioms", False):
+            normalized_text = seg.text
+        else:
+            normalized_text = idioms.normalize(seg.text, source_lang)
         protected_text, term_map = glossary.protect(normalized_text, config.glossary)
         translated = backends.translator.translate(
-            protected_text, source_lang=source_lang, target_lang=config.target_language
+            protected_text, source_lang=source_lang, target_lang=config.target_language,
+            # How long this line may run for. Backends that can't act on it
+            # ignore it; one that can is asked to fit, which is cheaper than
+            # letting mix.py cut the overrun off mid-word.
+            target_duration=seg.duration,
         )
         seg.translated_text = glossary.restore(translated, term_map)
         log.debug("  %.2fs-%.2fs: %r -> %r", seg.start, seg.end, seg.text, seg.translated_text)

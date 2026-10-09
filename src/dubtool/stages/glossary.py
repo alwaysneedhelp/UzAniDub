@@ -25,7 +25,10 @@ can't discover terms it wasn't told about.
 """
 from __future__ import annotations
 
+import logging
 import re
+
+log = logging.getLogger(__name__)
 
 
 def protect(text: str, glossary: dict[str, str]) -> tuple[str, dict[str, str]]:
@@ -46,9 +49,41 @@ def protect(text: str, glossary: dict[str, str]) -> tuple[str, dict[str, str]]:
     return protected, mapping
 
 
+# A placeholder as the model gave it back, possibly with its letters
+# mangled. Only the digits are relied on: an instruction-following backend
+# treats XPRESERVEDTERM40X as text to be rewritten and will happily return
+# XPRSERVEDTERM40X (one letter short), at which point an exact replace
+# leaves the sentinel in the finished line and the TTS reads it aloud as
+# gibberish. Observed on real Gemini output. The classic NMT backends pass
+# the token through untouched, which is why this only shows up with an LLM.
+_MANGLED_PLACEHOLDER = re.compile(r"X[A-Za-z]{0,24}?(\d{1,4})X")
+
+
 def restore(text: str, mapping: dict[str, str]) -> str:
     """Swaps placeholders back for their fixed glossary translations after
-    translation."""
+    translation.
+
+    Matches on the index rather than the literal placeholder, so a backend
+    that rewrote the surrounding letters still gets its term restored."""
     for placeholder, translation in mapping.items():
         text = text.replace(placeholder, translation)
-    return text
+    if not mapping or "X" not in text:
+        return text
+
+    by_index = {
+        match.group(1): translation
+        for placeholder, translation in mapping.items()
+        if (match := re.fullmatch(r"X[A-Za-z]*?(\d{1,4})X", placeholder))
+    }
+
+    def _rescue(match: re.Match[str]) -> str:
+        translation = by_index.get(match.group(1))
+        if translation is None:
+            return match.group(0)
+        log.warning(
+            "glossary placeholder came back altered as %r; restored %r by index",
+            match.group(0), translation,
+        )
+        return translation
+
+    return _MANGLED_PLACEHOLDER.sub(_rescue, text)
