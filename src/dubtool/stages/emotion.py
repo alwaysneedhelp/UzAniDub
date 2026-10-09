@@ -32,6 +32,33 @@ backends/tts_cosyvoice.py — instruct2 takes reference_audio too), so this
 doesn't trade away cloning, it trades away the zero-shot delivery path
 specifically. A segment is left unclassified only when there's no usable
 pitch signal at all (near-silent, unvoiced, or too short to track).
+
+Loudness is now judged against the *whole scene*, not each speaker's own
+median, and the line's punctuation counts. Both changes come from reading
+the classifier's inputs on real dubbed output:
+
+- Per-speaker baselines made a character who shouts throughout "calm":
+  their median line *is* a shout. And a speaker diarization gives only
+  one or two lines is mostly their own baseline, so everything they say
+  lands near 1.0. In a professionally mixed dub dialogue is levelled
+  across characters, so absolute loudness within the scene is the honest
+  signal -- shouting is loud, a mutter is quiet, whoever says it.
+- "!" and "?" from the transcript are a delivery cue the audio features
+  missed: "Are you for real?" was classified as a whisper for being quiet,
+  "I could never do that till now!" as calm. This is a character check,
+  not a text classifier -- it needs no model and no license, and the
+  transcriber emits punctuation for every language it handles.
+- Pitch *variability* no longer selects "nervous" or "tired". It fired on
+  an animated explanation as easily as on nerves, and turned plain
+  declaratives into a slow, drained "tired" reading. Both presets remain
+  available through --emotion.
+
+Measured alongside this: navoiy's presets do not reliably separate in
+pitch range or loudness variation (mean range 7.7-9.9 semitones across
+calm/happy/angry/surprised, vs the source actor's 6.8), and zero-shot was
+no better and far less predictable. So the leverage is in not sending an
+obviously wrong preset -- a whisper, a sorrowful reading -- for a line
+whose delivery is plain from its loudness and punctuation.
 """
 from __future__ import annotations
 
@@ -82,29 +109,36 @@ def classify_segments(segments: list[Segment], vocals_path: Path) -> dict[int, s
         end = min(len(data), int(seg.end * sr))
         features[i] = _pitch_and_energy(data[start:end], sr)
 
+    rmses = [features[i][2] for i in features if features[i][2] > 0]
+    if not rmses:
+        return {}
+    scene_rms = float(np.median(rmses))
+
     result: dict[int, str] = {}
     for speaker_id, indices in by_speaker.items():
         pitches = [features[i][0] for i in indices if features[i][0] > 0]
-        rmses = [features[i][2] for i in indices if features[i][2] > 0]
-        if not pitches or not rmses:
-            continue  # not enough signal to establish a baseline for this speaker
-        baseline_pitch = float(np.median(pitches))
-        baseline_rms = float(np.median(rmses))
-        stds = [features[i][1] for i in indices if features[i][0] > 0 and features[i][1] > 0]
-        baseline_pitch_std = float(np.median(stds)) if stds else 0.0
+        # A pitch baseline needs a few lines to mean anything; with fewer,
+        # a speaker's only line is its own baseline and every ratio is 1.0.
+        baseline_pitch = float(np.median(pitches)) if len(pitches) >= _MIN_LINES_FOR_PITCH else 0.0
 
         for i in indices:
-            pitch_mean, pitch_std, rms = features[i]
-            if pitch_mean <= 0 or baseline_pitch <= 0 or baseline_rms <= 0:
+            pitch_mean, _, rms = features[i]
+            # Skip only real silence. A line pitch tracking couldn't follow
+            # (shouted over music, say) still has a loudness and still has
+            # its punctuation -- "Exactly!" was left unclassified this way.
+            if rms <= _SILENCE_RMS or scene_rms <= 0:
                 continue
-            pitch_std_ratio = (pitch_std / baseline_pitch_std) if baseline_pitch_std > 0 else 1.0
-            emotion = _classify(pitch_mean / baseline_pitch, rms / baseline_rms, pitch_std_ratio)
-            if emotion:
-                result[i] = emotion
-                log.debug(
-                    "segment %d (%s): pitch_ratio=%.2f energy_ratio=%.2f pitch_std_ratio=%.2f -> %s",
-                    i, speaker_id, pitch_mean / baseline_pitch, rms / baseline_rms, pitch_std_ratio, emotion,
-                )
+            pitch_ratio = (
+                pitch_mean / baseline_pitch if pitch_mean > 0 and baseline_pitch > 0 else None
+            )
+            emotion = _classify(rms / scene_rms, pitch_ratio, segments[i].text)
+            result[i] = emotion
+            log.debug(
+                "segment %d (%s): energy_vs_scene=%.2f pitch_ratio=%s punct=%r -> %s",
+                i, speaker_id, rms / scene_rms,
+                f"{pitch_ratio:.2f}" if pitch_ratio is not None else "n/a",
+                _punctuation(segments[i].text), emotion,
+            )
     return result
 
 
@@ -126,26 +160,47 @@ def _pitch_and_energy(data: np.ndarray, sr: int) -> tuple[float, float, float]:
     return float(np.mean(voiced_f0)), float(np.std(voiced_f0)), rms
 
 
-def _classify(pitch_ratio: float, energy_ratio: float, pitch_std_ratio: float = 1.0) -> str:
-    """Always returns a preset — see the module docstring for why
-    near-baseline delivery now maps to "calm" instead of returning None.
-    Level-based thresholds (pitch_ratio/energy_ratio) are moderated from an
-    earlier, stricter version that required a bigger deviation than most
-    real dialogue actually reaches outside of genuinely extreme moments;
-    checked before the variability-based nervous/tired branches so a
-    strong level signal always wins over a variability one."""
-    if energy_ratio < 0.55:
-        return "whispers"
-    if pitch_ratio > 1.4 and energy_ratio > 1.25:
-        return "surprised"
-    if pitch_ratio > 1.2 and energy_ratio > 1.1:
-        return "happy"
-    if energy_ratio > 1.3 and pitch_ratio <= 1.2:
+_MIN_LINES_FOR_PITCH = 3
+_SILENCE_RMS = 1e-4
+_EXCLAIM = "!！¡"
+_QUESTION = "?？¿"
+# A question this short is a reaction ("Are you for real?", "Is he high?",
+# "What?"), not a request for information, and reads as surprise.
+_REACTION_MAX_WORDS = 5
+
+
+def _punctuation(text: str) -> str:
+    return ("!" if any(c in text for c in _EXCLAIM) else "") + (
+        "?" if any(c in text for c in _QUESTION) else ""
+    )
+
+
+def _classify(energy_vs_scene: float, pitch_ratio: float | None, text: str = "") -> str:
+    """Always returns a preset. `energy_vs_scene` is the line's loudness over
+    the scene's median line; `pitch_ratio` is against the speaker's own
+    median pitch, or None when the speaker has too few lines to have one.
+
+    Order matters: a shout is a shout whatever its punctuation, and
+    punctuation outranks the quieter-delivery presets, so an exclamation or
+    a reaction is never read as a whisper or as sorrow."""
+    punct = _punctuation(text)
+    exclaim, question = "!" in punct, "?" in punct
+    words = len(text.split())
+
+    if energy_vs_scene > 1.7:
+        # A shout. Anger raises pitch moderately; a jump far past the
+        # speaker's usual pitch on top of it is a shriek -- alarm, surprise.
+        if pitch_ratio is not None and pitch_ratio > 1.4:
+            return "surprised"
         return "angry"
-    if energy_ratio < 0.75 and pitch_ratio < 0.9:
+    if exclaim:
+        return "happy"            # navoiy's "happy, excited and energetic" preset
+    if question and (energy_vs_scene >= 0.9 or words <= _REACTION_MAX_WORDS):
+        return "surprised"
+    if energy_vs_scene < 0.45 and not question:
+        return "whispers"
+    if energy_vs_scene > 1.35:
+        return "angry"            # forceful without being marked as an exclamation
+    if energy_vs_scene < 0.6 and pitch_ratio is not None and pitch_ratio < 0.85:
         return "sad"
-    if pitch_std_ratio > 1.6 and 0.8 <= energy_ratio <= 1.3:
-        return "nervous"
-    if pitch_std_ratio < 0.6 and 0.75 <= energy_ratio < 0.9:
-        return "tired"
     return "calm"

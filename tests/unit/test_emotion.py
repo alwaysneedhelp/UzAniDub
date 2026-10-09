@@ -88,48 +88,98 @@ def test_silent_segment_is_left_unclassified(tmp_path):
     assert 2 not in result
 
 
-def test_shaky_pitch_at_ordinary_energy_is_classified_nervous():
-    assert _classify(pitch_ratio=1.0, energy_ratio=1.0, pitch_std_ratio=2.0) == "nervous"
+def test_a_shout_is_angry_whatever_its_punctuation():
+    assert _classify(energy_vs_scene=1.9, pitch_ratio=1.0, text="You're so right!") == "angry"
 
 
-def test_flat_pitch_at_slightly_low_energy_is_classified_tired():
-    assert _classify(pitch_ratio=1.0, energy_ratio=0.8, pitch_std_ratio=0.3) == "tired"
+def test_an_exclamation_gets_energetic_delivery_not_calm():
+    # "I could never do that till now!" was classified calm before.
+    assert _classify(energy_vs_scene=1.3, pitch_ratio=None, text="I could never do that till now!") == "happy"
 
 
-def test_level_based_classification_wins_over_variability_signal():
-    # a segment that's both loud/high-pitched (surprised) AND shaky-pitched
-    # should still come out "surprised" -- level-based signals are checked
-    # first and take priority (see _classify's docstring).
-    assert _classify(pitch_ratio=1.6, energy_ratio=1.4, pitch_std_ratio=2.0) == "surprised"
+def test_a_quiet_reaction_question_is_surprise_not_a_whisper():
+    # "Are you for real?" was whispered for being quiet.
+    assert _classify(energy_vs_scene=0.63, pitch_ratio=None, text="Are you for real?") == "surprised"
 
 
-def test_ordinary_variability_stays_calm():
-    assert _classify(pitch_ratio=1.0, energy_ratio=1.0, pitch_std_ratio=1.0) == "calm"
+def test_a_long_informational_question_stays_calm():
+    text = "Where exactly did you say the two of them were planning to meet tonight?"
+    assert _classify(energy_vs_scene=0.8, pitch_ratio=1.0, text=text) == "calm"
 
 
-def test_keeps_speakers_independent(tmp_path):
+def test_a_quiet_plain_line_is_whispered():
+    assert _classify(energy_vs_scene=0.3, pitch_ratio=1.0, text="Stay down.") == "whispers"
+
+
+def test_full_width_punctuation_counts():
+    assert _classify(energy_vs_scene=1.0, pitch_ratio=None, text="待て！") == "happy"
+
+
+def test_low_pitch_alone_does_not_make_a_line_sad():
+    # "Reverse Cursed Technique." came out sorrowful: ordinary loudness, a
+    # lowish pitch against the speaker's median. Sorrow needs it quiet too.
+    assert _classify(energy_vs_scene=0.69, pitch_ratio=0.62, text="Reverse Cursed Technique.") == "calm"
+
+
+def test_quiet_and_low_is_sad():
+    assert _classify(energy_vs_scene=0.5, pitch_ratio=0.8, text="I couldn't save them.") == "sad"
+
+
+def test_pitch_variability_no_longer_selects_nervous_or_tired():
+    # It fired on an animated explanation as easily as on nerves.
+    assert _classify(energy_vs_scene=0.98, pitch_ratio=1.09, text="So you multiply it against itself.") == "calm"
+
+
+def test_ordinary_delivery_stays_calm():
+    assert _classify(energy_vs_scene=1.0, pitch_ratio=1.0, text="Our fight is just getting started.") == "calm"
+
+
+def test_loudness_is_judged_against_the_scene_not_each_speaker(tmp_path):
+    # Per-speaker baselines made a character who shouts throughout "calm":
+    # their median line *is* a shout. Dialogue in a mixed dub is levelled
+    # across characters, so a character far louder than everyone else is
+    # shouting, and one far quieter is murmuring.
     sr = 16000
-    # speaker A: consistently loud; speaker B: consistently quiet.
-    # Neither should be flagged as strongly emotional just for being
-    # naturally louder/quieter than the other -- baselines are per-speaker,
-    # so both should land on the neutral "calm" preset, not e.g. "angry"/
-    # "whispers" from comparing across speakers.
     segments = [
-        Segment(start=0.0, end=2.0, speaker_id="A"),
-        Segment(start=2.0, end=4.0, speaker_id="B"),
-        Segment(start=4.0, end=6.0, speaker_id="A"),
-        Segment(start=6.0, end=8.0, speaker_id="B"),
+        Segment(start=0.0, end=2.0, speaker_id="A", text="Get out of my way"),
+        Segment(start=2.0, end=4.0, speaker_id="B", text="okay then"),
+        Segment(start=4.0, end=6.0, speaker_id="C", text="we should go"),
+        Segment(start=6.0, end=8.0, speaker_id="A", text="Move it now"),
+        Segment(start=8.0, end=10.0, speaker_id="C", text="right behind you"),
     ]
-    t = np.linspace(0, 8.0, 8 * sr, endpoint=False)
+    t = np.linspace(0, 10.0, 10 * sr, endpoint=False)
     data = np.zeros_like(t)
-    data[0 * sr : 2 * sr] = 0.5 * np.sin(2 * np.pi * 150 * t[0 * sr : 2 * sr])   # A, loud
-    data[2 * sr : 4 * sr] = 0.1 * np.sin(2 * np.pi * 150 * t[2 * sr : 4 * sr])   # B, quiet
-    data[4 * sr : 6 * sr] = 0.5 * np.sin(2 * np.pi * 150 * t[4 * sr : 6 * sr])   # A, loud (same as baseline)
-    data[6 * sr : 8 * sr] = 0.1 * np.sin(2 * np.pi * 150 * t[6 * sr : 8 * sr])   # B, quiet (same as baseline)
-
+    for (a, b), amp in zip([(0, 2), (2, 4), (4, 6), (6, 8), (8, 10)], [0.6, 0.04, 0.2, 0.6, 0.2]):
+        data[a * sr:b * sr] = amp * np.sin(2 * np.pi * 150 * t[a * sr:b * sr])
     vocals_path = tmp_path / "vocals.wav"
     sf.write(str(vocals_path), data.astype(np.float32), sr)
 
     result = classify_segments(segments, vocals_path)
 
-    assert result == {0: "calm", 1: "calm", 2: "calm", 3: "calm"}
+    assert result[0] == "angry" and result[3] == "angry"   # A shouts both lines
+    assert result[1] == "whispers"                           # B is far below the scene
+    assert result[2] == "calm" and result[4] == "calm"
+
+
+def test_a_line_pitch_tracking_missed_is_still_classified_from_loudness_and_punctuation(tmp_path):
+    # "Exactly!" was left unclassified because pyin found no pitch in it.
+    sr = 16000
+    rng = np.random.default_rng(0)
+    segments = [
+        Segment(start=0.0, end=2.0, speaker_id="A", text="fine"),
+        Segment(start=2.0, end=4.0, speaker_id="A", text="sure"),
+        Segment(start=4.0, end=5.0, speaker_id="A", text="Exactly!"),
+    ]
+    data = np.zeros(5 * sr, dtype=np.float32)
+    t = np.arange(4 * sr) / sr
+    data[:4 * sr] = 0.2 * np.sin(2 * np.pi * 150 * t)
+    data[4 * sr:] = (0.2 * rng.standard_normal(sr)).astype(np.float32)   # unpitched
+    vocals_path = tmp_path / "vocals.wav"
+    sf.write(str(vocals_path), data, sr)
+
+    assert classify_segments(segments, vocals_path).get(2) == "happy"
+
+
+def test_a_shout_far_above_the_speakers_usual_pitch_is_a_shriek_not_anger():
+    assert _classify(energy_vs_scene=2.5, pitch_ratio=1.8, text="") == "surprised"
+    assert _classify(energy_vs_scene=2.5, pitch_ratio=1.2, text="") == "angry"
