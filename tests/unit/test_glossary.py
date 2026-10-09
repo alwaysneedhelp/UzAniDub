@@ -87,3 +87,15 @@ def test_leaves_an_unknown_placeholder_like_token_alone():
     text = "Model X100X is unrelated."
     _, mapping = protect("nothing here", {"Gojo": "Gojo"})
     assert restore(text, mapping) == text
+
+
+def test_a_longer_term_is_not_consumed_by_a_shorter_one_inside_it():
+    # File order put "Cursed Technique" before "Reverse Cursed Technique";
+    # the shorter one matched first, the longer entry never applied, and the
+    # line came out as "returning to Cursed Technique".
+    glossary = {
+        "Cursed Technique": "La'nat texnikasi",
+        "Reverse Cursed Technique": "Teskari la'nat texnikasi",
+    }
+    protected, mapping = protect("Reverse Cursed Technique.", glossary)
+    assert restore(protected, mapping) == "Teskari la'nat texnikasi."

@@ -38,7 +38,13 @@ def protect(text: str, glossary: dict[str, str]) -> tuple[str, dict[str, str]]:
     """
     mapping: dict[str, str] = {}
     protected = text
-    for i, (term, translation) in enumerate(glossary.items()):
+    # Longest term first. In file order, "Cursed Technique" matched inside
+    # "Reverse Cursed Technique" and consumed it, so the longer entry never
+    # applied and MADLAD rendered "Reverse <term>" as "returning to <term>"
+    # -- observed on real output. A term that contains another must claim
+    # its text before the shorter one can.
+    ordered = sorted(glossary.items(), key=lambda item: len(item[0]), reverse=True)
+    for i, (term, translation) in enumerate(ordered):
         if not term.strip():
             continue
         placeholder = f"XPRESERVEDTERM{i}X"
