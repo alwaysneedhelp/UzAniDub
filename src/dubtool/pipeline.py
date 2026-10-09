@@ -297,6 +297,13 @@ def run(
             own_clip = reference.extract_segment_reference(
                 seg, vocals_path, work_dir / f"segment_ref_{i:03d}_{seg.speaker_id}.wav",
                 raw_audio_path=full_audio, background_path=background_path,
+                # How far a too-short line may widen its reference window:
+                # the run of neighbouring segments that are still the same
+                # speaker. Lets a half-second line borrow enough surrounding
+                # audio of its own character to be a usable voice sample,
+                # instead of falling back to one clip shared with every other
+                # short line (see stages/reference.py).
+                pad_bounds=_same_speaker_bounds(segments, i),
             )
             speaker_clip = reference_clips.get(seg.speaker_id)
             clip = own_clip or speaker_clip
@@ -413,6 +420,20 @@ def run(
         _cleanup(work_dir, keep={final_audio})
 
     return DubbingResult(output_video=actual_output, segments=segments, intermediate_dir=work_dir if config.keep_intermediate else None)
+
+
+def _same_speaker_bounds(segments: list[Segment], index: int) -> tuple[float, float]:
+    """Start/end of the unbroken run of segments around `index` that share
+    its speaker — the region a reference window may widen into without
+    picking up a different voice."""
+    speaker = segments[index].speaker_id
+    first = index
+    while first > 0 and segments[first - 1].speaker_id == speaker:
+        first -= 1
+    last = index
+    while last + 1 < len(segments) and segments[last + 1].speaker_id == speaker:
+        last += 1
+    return segments[first].start, segments[last].end
 
 
 def _validate_has_speech(segments: list[Segment]) -> None:

@@ -44,6 +44,7 @@ _SAMPLE_RATE = 16000          # Resemblyzer and webrtcvad both require this
 _VAD_FRAME_MS = 30            # webrtcvad accepts only 10/20/30
 _MIN_SPEECH_COVERAGE = 0.5    # a window must be at least half speech to cluster
 _MIN_TURN_DURATION = 0.4      # drop turns too short to transcribe usefully
+_MAX_BRIDGED_PAUSE = 0.35     # pauses shorter than this are mid-sentence, not turn changes
 
 
 class ResemblyzerDiarizer:
@@ -88,7 +89,7 @@ class ResemblyzerDiarizer:
             return [Segment(start=windows[0][0], end=windows[0][1], speaker_id="SPEAKER_00")]
 
         labels = self._cluster(embeddings, num_speakers)
-        segments = self._merge_adjacent(windows, labels)
+        segments = self._assign_to_speech_regions(speech_mask, windows, labels, duration)
         log.info(
             "diarized %.1fs into %d turn(s) across %d speaker(s)",
             duration, len(segments), len({s.speaker_id for s in segments}),
@@ -178,23 +179,47 @@ class ResemblyzerDiarizer:
             labels = model.fit_predict(embeddings)
         return labels
 
-    def _merge_adjacent(
-        self, windows: list[tuple[float, float]], labels: np.ndarray
+    def _speech_regions(self, speech_mask: np.ndarray) -> list[tuple[float, float]]:
+        """Contiguous runs of speech, bridged across short pauses.
+
+        These runs define what must be dubbed. Letting the embedding windows
+        decide that instead dropped every stretch that failed the coverage or
+        minimum-duration filters -- 36% of all dialogue on a real clip, which
+        reached the finished dub as music playing over a talking character."""
+        padded = np.concatenate(([False], speech_mask, [False]))
+        edges = np.flatnonzero(padded[1:] != padded[:-1])
+        runs = [
+            (edges[i] / _SAMPLE_RATE, edges[i + 1] / _SAMPLE_RATE)
+            for i in range(0, len(edges) - 1, 2)
+        ]
+        if not runs:
+            return []
+
+        # Bridge gaps shorter than this: a within-sentence breath is not a
+        # turn boundary, and splitting on it produces slots too short to say
+        # anything in.
+        merged = [runs[0]]
+        for start, end in runs[1:]:
+            if start - merged[-1][1] <= _MAX_BRIDGED_PAUSE:
+                merged[-1] = (merged[-1][0], end)
+            else:
+                merged.append((start, end))
+        return [(a, b) for a, b in merged if b - a >= _MIN_TURN_DURATION]
+
+    def _assign_to_speech_regions(
+        self,
+        speech_mask: np.ndarray,
+        windows: list[tuple[float, float]],
+        labels: np.ndarray,
+        duration: float,
     ) -> list[Segment]:
-        """Collapse consecutive same-label windows into single turns.
+        """Give every speech region a speaker, then split it where the
+        speaker changes.
 
-        Boundaries are midpoints between the *centres* of the two windows
-        where the label changes, not window edges: Resemblyzer's windows
-        overlap by design (1.6s wide, ~0.77s apart), so taking edges emitted
-        turns that overlapped each other by half a window. Downstream treats
-        segments as disjoint spans to transcribe and mix, so overlapping ones
-        double-count audio.
-
-        Labels are renumbered by first appearance so speaker ids read in the
-        order voices are actually heard, and match pyannote's SPEAKER_NN
-        spelling -- downstream keys the voice bank and per-speaker reference
-        clips off this string, so switching diarizers shouldn't rename
-        everyone."""
+        Coverage comes from the VAD regions and identity from the clustered
+        windows, so a region with no window of its own still gets dubbed --
+        it inherits the nearest window's speaker rather than being dropped.
+        """
         order: dict[int, str] = {}
 
         def speaker_id(label: int) -> str:
@@ -202,23 +227,38 @@ class ResemblyzerDiarizer:
                 order[label] = f"SPEAKER_{len(order):02d}"
             return order[label]
 
-        centres = [(start + end) / 2 for start, end in windows]
-        runs: list[tuple[int, int, int]] = []   # (label, first_idx, last_idx)
-        run_start = 0
-        for i in range(1, len(labels) + 1):
-            if i == len(labels) or labels[i] != labels[run_start]:
-                runs.append((int(labels[run_start]), run_start, i - 1))
-                run_start = i
-
+        centres = np.array([(a + b) / 2 for a, b in windows])
         segments: list[Segment] = []
-        for position, (label, first, last) in enumerate(runs):
-            start = windows[0][0] if position == 0 else (centres[first - 1] + centres[first]) / 2
-            if position == len(runs) - 1:
-                end = windows[-1][1]
-            else:
-                end = (centres[last] + centres[last + 1]) / 2
-            segments.append(Segment(start=start, end=end, speaker_id=speaker_id(label)))
 
-        segments = [s for s in segments if (s.end - s.start) >= _MIN_TURN_DURATION]
+        for region_start, region_end in self._speech_regions(speech_mask):
+            inside = [
+                i for i, (w_start, w_end) in enumerate(windows)
+                if w_end > region_start and w_start < region_end
+            ]
+            if not inside:
+                # No embedding window survived here, but somebody is still
+                # talking: hand it to the nearest window's speaker instead of
+                # leaving the line undubbed.
+                nearest = int(np.argmin(np.abs(centres - (region_start + region_end) / 2)))
+                segments.append(Segment(
+                    start=region_start, end=region_end,
+                    speaker_id=speaker_id(int(labels[nearest])),
+                ))
+                continue
+
+            # Split the region where the speaker changes, at the midpoint
+            # between the two windows that disagree.
+            cuts: list[tuple[float, int]] = [(region_start, int(labels[inside[0]]))]
+            for prev, cur in zip(inside, inside[1:]):
+                if labels[cur] != labels[prev]:
+                    cuts.append(((centres[prev] + centres[cur]) / 2, int(labels[cur])))
+            cuts.append((region_end, -1))
+
+            for (cut_start, label), (cut_end, _) in zip(cuts, cuts[1:]):
+                if cut_end - cut_start >= _MIN_TURN_DURATION:
+                    segments.append(Segment(
+                        start=cut_start, end=cut_end, speaker_id=speaker_id(label),
+                    ))
+
         segments.sort(key=lambda s: s.start)
         return segments

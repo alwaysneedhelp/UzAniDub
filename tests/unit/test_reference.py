@@ -194,3 +194,54 @@ def test_segment_reference_caps_at_max_duration(tmp_path):
 
     assert clip is not None
     assert abs((clip.end - clip.start) - 5.0) < 1e-6
+
+
+def test_short_segment_widens_its_window_when_given_speaker_bounds(tmp_path):
+    # Most anime lines are short: 8 of 13 segments in a real test clip were
+    # under 1.5s. Refusing all of them sent nearly every line to one shared
+    # speaker-level clip, which is what made a finished dub sound like a
+    # single monotone voice despite per-segment cloning being on.
+    sr = 16000
+    rng = np.random.default_rng(0)
+    data = (rng.standard_normal(int(3.0 * sr)) * 0.1).astype(np.float32)
+    vocals_path = _write_wav(tmp_path / "vocals.wav", data, sr)
+    seg = Segment(start=1.0, end=1.5, speaker_id="SPEAKER_00", text="hi")
+
+    clip = extract_segment_reference(
+        seg, vocals_path, tmp_path / "ref.wav",
+        min_duration=1.5, pad_bounds=(0.0, 3.0),
+    )
+
+    assert clip is not None
+    assert (clip.end - clip.start) >= 1.5 - 1e-6
+
+
+def test_widening_stays_inside_the_speakers_own_region(tmp_path):
+    # The bound is the point the next character starts talking. Crossing it
+    # would clone the wrong voice -- silently, and worse than a monotone.
+    sr = 16000
+    rng = np.random.default_rng(1)
+    data = (rng.standard_normal(int(5.0 * sr)) * 0.1).astype(np.float32)
+    vocals_path = _write_wav(tmp_path / "vocals.wav", data, sr)
+    seg = Segment(start=2.4, end=2.8, speaker_id="SPEAKER_00", text="hi")
+
+    clip = extract_segment_reference(
+        seg, vocals_path, tmp_path / "ref.wav",
+        min_duration=1.5, pad_bounds=(1.5, 3.2),
+    )
+
+    assert clip is not None
+    assert clip.start >= 1.5 - 1e-6
+    assert clip.end <= 3.2 + 1e-6
+
+
+def test_refuses_to_widen_when_the_whole_turn_is_still_too_short(tmp_path):
+    sr = 16000
+    data = (np.random.default_rng(2).standard_normal(int(3.0 * sr)) * 0.1).astype(np.float32)
+    vocals_path = _write_wav(tmp_path / "vocals.wav", data, sr)
+    seg = Segment(start=1.0, end=1.3, speaker_id="SPEAKER_00", text="hi")
+
+    assert extract_segment_reference(
+        seg, vocals_path, tmp_path / "ref.wav",
+        min_duration=1.5, pad_bounds=(0.9, 1.6),      # only 0.7s of speaker audio
+    ) is None

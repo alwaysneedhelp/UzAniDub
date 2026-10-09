@@ -130,6 +130,7 @@ def extract_segment_reference(
     min_duration: float = 1.5,
     max_duration: float = 10.0,
     background_energy_ratio: float = 0.1,
+    pad_bounds: tuple[float, float] | None = None,
 ) -> ReferenceClip | None:
     """Uses a single segment's *own* original-language audio as its voice-
     cloning reference, instead of one fixed clip reused for every line a
@@ -155,8 +156,39 @@ def extract_segment_reference(
 
     start_sample = max(0, int(segment.start * sr))
     end_sample = min(len(data), int(segment.end * sr))
+
     if end_sample - start_sample < int(min_duration * sr):
-        return None
+        # A line too short to be its own reference used to return None and
+        # fall back to the speaker-level clip. On real anime dialogue most
+        # lines are short -- 8 of 13 segments in a test clip were under 1.5s
+        # -- and whenever diarization also collapses most turns onto one
+        # speaker, nearly every line ends up cloning the *same* reference.
+        # That is what makes a finished dub sound like one monotone voice
+        # even with per-segment cloning switched on.
+        #
+        # So widen the window instead of discarding the line. The audio
+        # immediately around a line is the same character still speaking (or
+        # silence), which is a perfectly good sample of their voice -- as
+        # long as it stops before the neighbouring speaker starts, which is
+        # what pad_bounds carries.
+        if pad_bounds is None:
+            # Widening needs to know where this speaker's audio ends. Without
+            # that, padding could run straight into the next character and
+            # clone the wrong voice -- a worse outcome than the monotone this
+            # is meant to fix, and a silent one. Refuse instead.
+            return None
+        need = int(min_duration * sr)
+        centre = (start_sample + end_sample) // 2
+        low = max(0, int(pad_bounds[0] * sr))
+        high = min(len(data), int(pad_bounds[1] * sr))
+        if high - low < need:
+            return None          # even the whole turn is too short to use
+        padded_start = max(low, centre - need // 2)
+        padded_end = min(high, padded_start + need)
+        padded_start = max(low, padded_end - need)
+        if padded_end - padded_start < need:
+            return None
+        start_sample, end_sample = padded_start, padded_end
 
     max_len = int(max_duration * sr)
     if end_sample - start_sample > max_len:
