@@ -1,4 +1,10 @@
 .venv/
+
+# Local secrets. README tells you to put HF_TOKEN here, and this repo is
+# public — without this line a token lands in the first `git add -A`.
+.env
+.env.*
+!.env.example
 __pycache__/
 *.pyc
 .pytest_cache/
