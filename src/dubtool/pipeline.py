@@ -13,9 +13,10 @@ for acoustically extreme segments.
 """
 from __future__ import annotations
 
+import gc
 import logging
 import tempfile
-from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 
 from dubtool.config import DubConfig
@@ -39,13 +40,124 @@ from dubtool.types import DubbingResult, ReferenceClip, Segment
 log = logging.getLogger("dubtool.pipeline")
 
 
-@dataclass
+_BACKEND_NAMES = ("separator", "diarizer", "transcriber", "translator", "tts")
+
+
+def _release_torch_caches() -> None:
+    """Hand back any allocator-cached blocks after a backend is dropped.
+    No-op on a pure-CPU install; cheap enough not to bother checking which
+    of these a given machine actually has."""
+    try:
+        import torch
+    except ImportError:
+        return
+    for accel in ("mps", "cuda"):
+        backend = getattr(torch, accel, None)
+        empty = getattr(backend, "empty_cache", None)
+        if empty is not None:
+            try:
+                empty()
+            except Exception:  # pragma: no cover - best-effort only
+                pass
+
+
 class Backends:
-    separator: Separator
-    diarizer: Diarizer
-    transcriber: Transcriber
-    translator: Translator
-    tts: TTSBackend
+    """The five swappable backends, built on first use and releasable.
+
+    Each entry is a zero-argument factory rather than a ready instance,
+    because `run()` below uses the five strictly one stage at a time and
+    never needs two at once. Constructing them all upfront pinned every
+    model's weights for the whole episode — ~12GB for CosyVoice2 + navoiy
+    + MADLAD + Whisper + Demucs — which on a 16GB machine pushed the run
+    into swap partway through synthesis and took CosyVoice2 from RTF ~3 to
+    RTF ~117. Loading each one when its stage starts and dropping it when
+    that stage ends holds peak memory to roughly the largest single model
+    instead of their sum.
+
+    Use `of()` when you already have ready instances (tests, or any caller
+    doing its own lifecycle management) — nothing is lazy or freed then.
+    """
+
+    __slots__ = ("_factories", "_built")
+
+    def __init__(
+        self,
+        *,
+        separator: Callable[[], Separator],
+        diarizer: Callable[[], Diarizer],
+        transcriber: Callable[[], Transcriber],
+        translator: Callable[[], Translator],
+        tts: Callable[[], TTSBackend],
+    ) -> None:
+        self._factories: dict[str, Callable[[], object]] = {
+            "separator": separator,
+            "diarizer": diarizer,
+            "transcriber": transcriber,
+            "translator": translator,
+            "tts": tts,
+        }
+        self._built: dict[str, object] = {}
+
+    @classmethod
+    def of(
+        cls,
+        *,
+        separator: Separator,
+        diarizer: Diarizer,
+        transcriber: Transcriber,
+        translator: Translator,
+        tts: TTSBackend,
+    ) -> "Backends":
+        """Wrap already-constructed backends. `release()` becomes a no-op:
+        the caller owns these instances, so dropping our reference wouldn't
+        free them and re-accessing must not hand back a different object."""
+        instances = {
+            "separator": separator, "diarizer": diarizer,
+            "transcriber": transcriber, "translator": translator, "tts": tts,
+        }
+        self = cls(**{name: (lambda v=value: v) for name, value in instances.items()})
+        self._built.update(instances)
+        return self
+
+    def _get(self, name: str) -> object:
+        if name not in self._built:
+            log.info("loading %s backend", name)
+            self._built[name] = self._factories[name]()
+        return self._built[name]
+
+    @property
+    def separator(self) -> Separator:
+        return self._get("separator")  # type: ignore[return-value]
+
+    @property
+    def diarizer(self) -> Diarizer:
+        return self._get("diarizer")  # type: ignore[return-value]
+
+    @property
+    def transcriber(self) -> Transcriber:
+        return self._get("transcriber")  # type: ignore[return-value]
+
+    @property
+    def translator(self) -> Translator:
+        return self._get("translator")  # type: ignore[return-value]
+
+    @property
+    def tts(self) -> TTSBackend:
+        return self._get("tts")  # type: ignore[return-value]
+
+    def release(self, *names: str) -> None:
+        """Drop the named backends so their weights can be collected before
+        the next stage loads its own. Re-accessing one rebuilds it from its
+        factory, so this is safe to call even if a later stage needs it
+        again — it just pays the load cost twice."""
+        unknown = set(names) - set(_BACKEND_NAMES)
+        if unknown:
+            raise ValueError(f"unknown backend(s): {sorted(unknown)}")
+        freed = [name for name in names if self._built.pop(name, None) is not None]
+        if freed:
+            gc.collect()
+            _release_torch_caches()
+            log.info("released %s backend(s)", ", ".join(freed))
 
 
 class NoSpeechDetectedError(RuntimeError):
@@ -79,9 +191,11 @@ def run(
 
     log.info("Stage 2/8: separating vocals from background")
     vocals_path, background_path = backends.separator.separate(full_audio, work_dir)
+    backends.release("separator")
 
     log.info("Stage 3/8: diarizing")
     diarized_segments = backends.diarizer.diarize(vocals_path, num_speakers=config.num_speakers)
+    backends.release("diarizer")
     _validate_speaker_count(diarized_segments, config.num_speakers)
     segments = diarized_segments
 
@@ -131,6 +245,7 @@ def run(
     # stages/glossary.py.
     for name in new_names:
         config.glossary[name] = name
+    backends.release("transcriber")
 
     # Whisper's own segment boundaries aren't sentence-aware and can cut a
     # sentence in half, which measurably hurts translation quality for the
@@ -221,6 +336,7 @@ def run(
         )
         seg.translated_text = glossary.restore(translated, term_map)
         log.debug("  %.2fs-%.2fs: %r -> %r", seg.start, seg.end, seg.text, seg.translated_text)
+    backends.release("translator")
 
     log.info("Stage 7/8: synthesizing + time-aligning")
     sr = backends.tts.sample_rate
@@ -270,11 +386,12 @@ def run(
         # (a real, reported issue). Emotion-aware so this doesn't flatten
         # the "whispers"/"angry" dynamics from the classification above.
         seg.synthesized_audio = loudness.normalize(aligned, emotion=seg_emotion)
-        seg.synthesized_sr = backends.tts.sample_rate
+        seg.synthesized_sr = sr
+    backends.release("tts")
 
     log.info("Stage 8/8: mixing" + (" + muxing" if has_video else " (no video to mux into)"))
     final_audio = mix.mix_segments(
-        segments, background_path, work_dir / "final_audio.wav", sample_rate=backends.tts.sample_rate
+        segments, background_path, work_dir / "final_audio.wav", sample_rate=sr
     )
     if has_video:
         mux.mux(video_path, final_audio, output_path)

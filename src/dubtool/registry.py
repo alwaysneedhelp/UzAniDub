@@ -4,23 +4,81 @@ Imports for each concrete backend (Demucs/faster-whisper/MADLAD/CosyVoice)
 are lazy, inside each branch, so something like `dubtool --help` — or a unit
 test that only needs align.py — doesn't pay their import cost or require
 them installed.
+
+build_backends() hands pipeline.Backends the *factories* rather than
+constructed instances, so each model is loaded when its stage starts and
+freed when that stage ends (see pipeline.Backends for why). preflight()
+exists to keep the fail-fast behaviour that deferring construction would
+otherwise cost: without it, a bad backend name or a missing TTS
+checkpoint wouldn't surface until Stage 7, half an hour of Demucs and
+Whisper into a run.
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from dubtool.config import DubConfig
 from dubtool.pipeline import Backends
 
+log = logging.getLogger(__name__)
+
+_KNOWN_BACKENDS = {
+    "separate": {"demucs"},
+    "diarize": {"auto", "pyannote", "resemblyzer", "single_speaker_stub"},
+    "transcribe": {"faster_whisper"},
+    "translate": {"madlad", "opus_mt", "nllb", "gemini"},
+    "tts": {"cosyvoice_navoiy"},
+}
+
 
 def build_backends(config: DubConfig) -> Backends:
     return Backends(
-        separator=_build_separator(config),
-        diarizer=_build_diarizer(config),
-        transcriber=_build_transcriber(config),
-        translator=_build_translator(config),
-        tts=_build_tts(config),
+        separator=lambda: _build_separator(config),
+        diarizer=lambda: _build_diarizer(config),
+        transcriber=lambda: _build_transcriber(config),
+        translator=lambda: _build_translator(config),
+        tts=lambda: _build_tts(config),
     )
+
+
+def preflight(config: DubConfig) -> None:
+    """Check what can be checked without loading a single weight: that every
+    configured backend name is one we implement, and that the TTS stack's
+    local files are actually on disk. Everything else (MADLAD, Whisper,
+    Demucs, pyannote) downloads itself on first use, so its absence isn't an
+    error we can detect here — but CosyVoice2 and navoiy-tts are
+    hand-installed under poc/models, and a missing checkpoint there is the
+    failure most worth catching before Demucs spends ten minutes."""
+    for stage, name in config.backends.items():
+        known = _KNOWN_BACKENDS.get(stage)
+        if known is not None and name not in known:
+            raise ValueError(
+                f"unknown {stage} backend: {name!r} (known: {sorted(known)})"
+            )
+
+    if config.backends.get("tts") == "cosyvoice_navoiy":
+        required = {
+            "CosyVoice source checkout": config.models.cosyvoice_source_dir,
+            "CosyVoice2 base model": config.models.cosyvoice_base_dir,
+            "navoiy-tts checkpoint": config.models.navoiy_checkpoint,
+        }
+        missing = [f"{label} ({path})" for label, path in required.items() if not path.exists()]
+        if missing:
+            raise FileNotFoundError(
+                "TTS backend 'cosyvoice_navoiy' is missing required local files:\n  - "
+                + "\n  - ".join(missing)
+                + "\nSee Setup.md / setup_openvoice.sh, or point config.models at them."
+            )
+
+    if not config.models.default_reference_audio.exists():
+        # Not fatal: only segments with no usable cloning reference of their
+        # own fall back to it, which may never happen in a given run.
+        log.warning(
+            "bundled fallback reference voice is missing (%s); segments with no "
+            "usable reference of their own will fail to synthesize",
+            config.models.default_reference_audio,
+        )
 
 
 def _build_separator(config: DubConfig):
@@ -31,17 +89,60 @@ def _build_separator(config: DubConfig):
     raise ValueError(f"unknown separate backend: {name!r}")
 
 
+def _single_speaker_stub():
+    from dubtool.stages.diarize import SingleSpeakerStub
+    return SingleSpeakerStub()
+
+
+def _resemblyzer_diarizer(config: DubConfig):
+    from dubtool.backends.diarize_resemblyzer import ResemblyzerDiarizer
+    return ResemblyzerDiarizer()
+
+
 def _build_diarizer(config: DubConfig):
     name = config.backends["diarize"]
+    explicit = name != "auto"
     if name == "auto":
-        name = "pyannote" if (config.hf_token or os.environ.get("HF_TOKEN")) else "single_speaker_stub"
+        name = "pyannote" if (config.hf_token or os.environ.get("HF_TOKEN")) else "resemblyzer"
+    if name == "resemblyzer":
+        return _resemblyzer_diarizer(config)
     if name == "pyannote":
         from dubtool.backends.diarize_pyannote import PyannoteDiarizer
-        return PyannoteDiarizer(hf_token=config.hf_token)
+        try:
+            return PyannoteDiarizer(hf_token=config.hf_token)
+        except Exception as e:
+            # "auto" means "use the best diarizer actually available", and
+            # having a token is not the same as having access: pyannote's
+            # models are individually gated, and pyannote.audio 4.x pulls a
+            # PLDA transform from speaker-diarization-community-1, whose gate
+            # is manually approved rather than instant like 3.1's and
+            # segmentation-3.0's. Before this, setting up a token to *enable*
+            # diarization turned a working single-speaker run into a run that
+            # died at stage 3 -- strictly worse than having no token at all.
+            # Someone who asked for pyannote by name still gets the error.
+            if explicit:
+                raise
+            log.warning(
+                "pyannote diarization is unavailable (%s: %s); falling back to the "
+                "resemblyzer diarizer, which needs no gated models. If that was a "
+                "gated-access error, request access to the model it names "
+                "(pyannote.audio %s requires it) and re-run to get pyannote's "
+                "better boundaries and overlap handling.",
+                type(e).__name__, str(e).splitlines()[0][:200],
+                _pyannote_version(),
+            )
+            return _resemblyzer_diarizer(config)
     if name == "single_speaker_stub":
-        from dubtool.stages.diarize import SingleSpeakerStub
-        return SingleSpeakerStub()
+        return _single_speaker_stub()
     raise ValueError(f"unknown diarize backend: {name!r}")
+
+
+def _pyannote_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("pyannote.audio")
+    except Exception:
+        return "unknown"
 
 
 def _build_transcriber(config: DubConfig):

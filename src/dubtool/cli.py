@@ -9,7 +9,7 @@ import yaml
 
 from dubtool.config import DubConfig
 from dubtool.pipeline import run as run_pipeline
-from dubtool.registry import build_backends
+from dubtool.registry import build_backends, preflight
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -148,6 +148,10 @@ def main(argv: list[str] | None = None) -> int:
 
     backends = build_backends(config)
     try:
+        # Backends are now constructed per stage rather than upfront, so
+        # check what's checkable before Demucs starts — otherwise a typo'd
+        # backend name or a missing TTS checkpoint only shows up at Stage 7.
+        preflight(config)
         result = run_pipeline(args.video, output_path, config, backends)
     except Exception as e:
         log.error("dubbing failed: %s", e)
