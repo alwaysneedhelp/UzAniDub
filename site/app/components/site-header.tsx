@@ -3,7 +3,7 @@ import Link from "next/link";
 import { listGenres } from "../../lib/library";
 
 export function Wordmark() {
-  return <Link className="wordmark" href="/" aria-label="UzAniDub home">UzAniDub</Link>;
+  return <Link className="wordmark" href="/" aria-label="UzAniDub home">Uz<b>AniDub</b></Link>;
 }
 
 export default async function SiteHeader() {

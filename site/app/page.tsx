@@ -23,11 +23,12 @@ export default async function Home() {
   const featured = watchable.find((show) => show.cover_key) ?? watchable[0];
 
   return <>
-    {featured && <section className="feature page-shell">
+    {featured && <div className="feature-band"><section className="feature page-shell">
       <Link className="feature-cover" href={`/series/${featured.id}`} tabIndex={-1} aria-hidden="true">
         <Poster id={featured.id} title={featured.title} hasCover={!!featured.cover_key} eager />
       </Link>
       <div className="feature-info">
+        <p className="feature-kicker">Uzbek dub</p>
         <h1><Link href={`/series/${featured.id}`}>{featured.title}</Link></h1>
         <p className="feature-meta">{splitGenres(featured.genre).join(", ")}<span>{episodeLabel(featured.episode_count)}</span></p>
         {featured.synopsis && <p className="feature-synopsis">{featured.synopsis}</p>}
@@ -36,7 +37,7 @@ export default async function Home() {
           <Link className="btn btn-secondary" href={`/series/${featured.id}`}>All episodes</Link>
         </div>
       </div>
-    </section>}
+    </section></div>}
 
     <ContinueWatching />
 

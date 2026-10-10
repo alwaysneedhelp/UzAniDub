@@ -1,7 +1,7 @@
 # UzAniDub website
 
-A library for Uzbek dubbed anime: anyone can browse and watch, and signed-in
-members can add anime and upload episodes. Catalog metadata lives in Cloudflare
+A library for Uzbek dubbed anime: anyone can browse, watch, add anime and
+upload episodes, with no account. Catalog metadata lives in Cloudflare
 D1; covers, episode videos, and episode thumbnails live in R2.
 
 Pages:
@@ -29,13 +29,10 @@ npm run dev
 
 Apply each migration once, then open `http://localhost:3000`.
 
-Uploading requires Sites' ChatGPT sign-in, supplied by the hosted dispatcher.
-To test uploading locally, start `npm run dev` with the
-`DUBTOOL_LOCAL_PUBLISHER` environment variable set to a local test email.
-This identity is injected only into the local development server and only for
-localhost requests. Hosted access should stay private until distribution
-rights for uploaded media and art are confirmed. If access is opened later,
-add a server-side uploader allowlist before permitting arbitrary sign-ins.
+Uploading is open: nobody needs to sign in to add an anime or upload an
+episode. Anyone who can reach the site can publish to it, so keep hosted access
+private until distribution rights for uploaded media and art are confirmed, or
+add an uploader check in `lib/auth.ts` before opening it up.
 
 The dubbing engine (`src/dubtool`, started with `run_engine.py`) is separate
 from the website; publish its finished videos through the upload page.

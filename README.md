@@ -255,9 +255,6 @@ npx wrangler d1 execute DB --local --config wrangler.local.jsonc --persist-to .w
 npm run dev
 ```
 
-To test cover and episode publishing locally, set
-`$env:DUBTOOL_LOCAL_PUBLISHER = "local@localhost"` before `npm run dev`.
-
 Apply each migration only once to a given local database. Open
 `http://localhost:3000/create`. Short test scenes are limited to 512 MB in the
 web workbench; the CLI is better for full episodes:

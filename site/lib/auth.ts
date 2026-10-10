@@ -1,9 +1,14 @@
-import { getChatGPTUser } from "../app/chatgpt-auth";
 import { sameOrigin } from "./library";
+
+/**
+ * Uploading is open: anyone can add anime and episodes without an account.
+ * Uploads are still tied to one owner label so an in-progress upload can only
+ * be continued, completed or aborted by the same flow that started it (the
+ * upload id is an unguessable UUID).
+ */
+const GUEST_OWNER = "guest";
 
 export async function mutationUser(request: Request): Promise<string | Response> {
   if (!sameOrigin(request)) return Response.json({ error: "Invalid request origin" }, { status: 403 });
-  const user = await getChatGPTUser();
-  if (!user) return Response.json({ error: "Sign in to upload" }, { status: 401 });
-  return user.email;
+  return GUEST_OWNER;
 }
