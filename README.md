@@ -10,13 +10,15 @@ input has no video track).
 ```
 video (any language)
   -> vocal/background separation (Demucs)
-  -> speaker diarization (pyannote, optional)
+  -> speaker diarization (pyannote if its gated models are reachable,
+     else an ungated Resemblyzer-based diarizer)
   -> transcription (faster-whisper)
   -> English slang/idiom normalization (for English-source segments)
   -> translation to Uzbek (MADLAD-400)
   -> Uzbek speech synthesis (CosyVoice2 + navoiy-tts)
-  -> time-alignment + loudness normalization
-  -> mix + mux back into the video
+  -> timing: every line spoken in full, sped up only via the TTS
+  -> loudness that follows the actor, plus vocal effort on shouted lines
+  -> stereo mix over the original music/effects + mux into the video
 ```
 
 Every stage above is a swappable backend behind `dubtool.interfaces` (see
@@ -29,13 +31,20 @@ documentary), with known rough edges: MADLAD occasionally hallucinates on
 a specific input line rather than mistranslating it, and per-segment
 timing correction sometimes has to trade off accepting timing drift
 against distorting the voice further (see `config.py` for the full
-reasoning). Voice cloning per speaker is **on by default** (each segment
-clones its speaker's own voice from the source audio, see `--no-clone-voices`
-to disable); it's combined with acoustic emotion classification
-(`stages/emotion.py`) so nearly every segment also gets an explicit
-delivery style instead of a flat, generic reading — see
-[Emotion](#emotion) below for why that combination, specifically, turned
-out to matter.
+reasoning). Voice cloning per character is **on by default**: every line
+a character speaks clones from one reference of their voice, taken from
+the source audio and kept in a persistent voice bank so they sound the
+same across episodes (see `--no-clone-voices` to disable). It's combined
+with emotion classification so nearly every line gets an explicit
+delivery style, and with loudness that follows the original performance
+— see [Emotion](#emotion).
+
+Lines are never cut short to fit their slot. Uzbek usually runs longer
+than the English it replaces, so a line may use the pause after it, is
+sped up (through the TTS itself, never by stretching the audio) only as
+far as it needs, and if it still runs long the next line waits. With
+MADLAD that can leave a line starting up to a second or so late in dense
+dialogue; the opt-in Gemini translator can be asked for lines that fit.
 
 ## Install
 
@@ -54,22 +63,25 @@ Model weights (CosyVoice2, navoiy-tts, MADLAD-400, Demucs, Whisper, etc.)
 download automatically on first use — expect a multi-GB download and
 some time the first run.
 
-### Optional: multi-speaker diarization
+### Optional: pyannote diarization
 
-Real multi-speaker diarization (pyannote) requires a free Hugging Face
-account, accepting the license terms on the
-[speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
-and [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
-model pages, and an access token:
+Multi-speaker diarization works out of the box with an ungated diarizer
+(`backends/diarize_resemblyzer.py`). pyannote gives better turn
+boundaries and handles overlapping speech, but its models are gated: you
+need a free Hugging Face account, a token, and access to **all** of
+[speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1),
+[segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) and
+[speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+(pyannote.audio 4.x needs the last one; unlike the other two, its access
+is approved by hand, so it can take a while).
 
 ```bash
 echo "HF_TOKEN=hf_your_token_here" > .env
 ```
 
-Without a token, dubtool falls back to treating the whole clip as one
-speaker — everything still works, it just won't distinguish speakers for
-per-speaker features like voice cloning (every line clones from the same
-one detected "speaker" instead of per-character).
+With a token, `diarize: auto` tries pyannote and falls back to the
+ungated diarizer if access is refused. To skip the attempt, set
+`backends: {diarize: resemblyzer}` in a config file.
 
 ## Usage
 
@@ -90,7 +102,7 @@ Writes the dubbed video to `output/<input filename>` by default.
 | `--names NAMES` | Character/place names to bias transcription toward and keep verbatim through translation. Either `"Naruto,Sasuke,Sakura"` or a path to a file, one name per line (see `assets/example_character_names.txt`) |
 | `--glossary PATH` | YAML file of `{source term: fixed Uzbek translation}` pairs, enforced consistently on every occurrence — see [Glossary](#glossary) below |
 | `--no-clone-voices` | Use the bundled generic voice for every line instead of cloning each speaker's own voice (cloning is on by default — see [Status](#status)) |
-| `--voice-bank-dir PATH` | Directory for the persistent cross-run voice bank, only relevant with voice cloning enabled (default: `./voice_bank`) |
+| `--voice-bank-dir PATH` | Directory for the persistent cross-run voice bank, only relevant with voice cloning enabled (default: `./voice_bank`). Use one per show, e.g. `voice_bank/jjk` — matching is by voice similarity alone, so a shared bank can give one show's character another show's voice |
 | `--no-voice-bank` | Disable the persistent voice bank for this run |
 | `--emotion NAME` | Force one TTS delivery style for every segment instead of each segment's own acoustically-detected style (see [Emotion](#emotion)) |
 | `--keep-intermediate` | Keep extracted audio, separated tracks, etc. for debugging |
@@ -130,25 +142,28 @@ the same underlying glossary and can be combined.
 
 ## Emotion
 
-Each segment's own original audio is scored for pitch/energy relative to
-its speaker's own baseline elsewhere in the file (`stages/emotion.py`),
-and routed into CosyVoice2's `inference_instruct2` with a matching named
-delivery style (calm, happy, sad, angry, surprised, whispers, nervous,
-tired) — the
-cloned reference clip (see above) still supplies voice *identity* in that
-same call, so this isn't an either/or against cloning.
+Every line gets a delivery style for CosyVoice2's `inference_instruct2`
+(navoiy-tts's trained presets: calm, happy, sad, angry, surprised,
+whispers, ...), chosen from how the actor delivered it
+(`stages/emotion.py`): loudness measured against the whole scene rather
+than each speaker's own baseline, so a character who shouts throughout
+isn't read as calm; and the transcript's `!`/`?`, so an exclamation gets
+an energetic reading and a short question reads as surprise instead of a
+whisper.
 
-Earlier, only acoustically extreme segments got an explicit style; a
-near-baseline segment fell back to `inference_zero_shot` (implicit,
-"natural" prosody transfer from the reference clip) instead. That
-produced consistently flat/robotic output even with a real, expressive
-per-segment reference clip — the navoiy-tts checkpoint was fine-tuned
-mainly on discrete named emotion presets, not on zero-shot delivery
-transfer, so zero-shot was the actual weak link, not voice cloning
-itself. Now nearly every segment gets classified (near-baseline delivery
-maps to `calm` rather than nothing), so instruct2 handles almost
-everything; zero-shot is only reached when a segment has no usable pitch
-signal at all (near-silent/unvoiced).
+The presets move pitch (+4-6 semitones for happy/angry/surprised over
+calm, measured) but not much else, so two more things come from the
+original performance (`stages/loudness.py`):
+
+- **Loudness follows the actor.** Each line is levelled to the loudness
+  the actor gave it, so a shout lands as a shout and the voice sits
+  against the music where the original dialogue did. Levelling every line
+  to a fixed target had squeezed a 9.5dB range into 2.3dB.
+- **Vocal effort on shouted lines.** A scream is not only louder: effort
+  pushes energy into the 2-4kHz presence range, which no instruction made
+  the TTS do. Lines the actor delivered well above the scene get a
+  presence boost in proportion, up to +6dB for a full scream. Each line's
+  intensity and effort are logged.
 
 ## Slang/idiom normalization
 
