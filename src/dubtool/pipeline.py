@@ -280,11 +280,17 @@ def run(
         # affects the speaker-level *fallback* clip — per-segment references
         # below are unaffected, so within-scene emotional variety still
         # comes from each line's own audio.
+        bank = None
+        # Bank entries already claimed by a character in this run, so a
+        # second character can't match or overwrite one (see find_or_add).
+        claimed: set[str] = set()
         if config.voice_bank_dir is not None:
             bank = voice_bank.VoiceBank(config.voice_bank_dir, config.voice_bank_similarity_threshold)
             for speaker_id, clip in list(reference_clips.items()):
                 score = reference.clip_quality_score(clip.path)
-                reference_clips[speaker_id] = bank.find_or_add(clip.path, clip.text, score)
+                banked = bank.find_or_add(clip.path, clip.text, score, exclude=claimed)
+                claimed.add(Path(banked.path).stem)
+                reference_clips[speaker_id] = banked
 
         # One reference per character, used for every line they speak.
         #
@@ -313,6 +319,16 @@ def run(
                         work_dir / f"montage_{seg.speaker_id}.wav",
                         raw_audio_path=full_audio, background_path=background_path,
                     )
+                    # Bank it like a speaker clip. Only contiguous 4s+ clips
+                    # used to be stored, so on a real clip just the main
+                    # character's voice was kept; everyone with short lines
+                    # was rebuilt from scratch next episode and could come out
+                    # sounding like someone else.
+                    if clip is not None and bank is not None:
+                        clip = bank.find_or_add(
+                            clip.path, clip.text, reference.clip_quality_score(clip.path), exclude=claimed,
+                        )
+                        claimed.add(Path(clip.path).stem)
                 character_refs[seg.speaker_id] = clip
             clip = character_refs[seg.speaker_id]
             if clip is None:

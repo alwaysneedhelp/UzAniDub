@@ -65,11 +65,25 @@ class VoiceBank:
         self.similarity_threshold = similarity_threshold
         self.directory.mkdir(parents=True, exist_ok=True)
 
-    def find_or_add(self, candidate_path: Path, candidate_text: str, candidate_score: float) -> ReferenceClip:
+    def find_or_add(
+        self,
+        candidate_path: Path,
+        candidate_text: str,
+        candidate_score: float,
+        exclude: frozenset[str] | set[str] = frozenset(),
+    ) -> ReferenceClip:
         """Returns the ReferenceClip to actually use: either a matched
         existing bank entry (updated in place if `candidate_score` beats
         its stored score), or a freshly registered new entry built from
         `candidate_path`/`candidate_text`.
+
+        `exclude` holds the entries other characters in this same run have
+        already claimed, which this candidate may neither match nor
+        overwrite. Without it, a second character whose voice scored >=0.75
+        against the first's entry replaced that entry's audio mid-run -- on
+        a real clip the main character's 8s reference was overwritten by a
+        side character's 2.5s one, and both then cloned the same voice.
+        Matching across runs is unaffected: that's the bank's whole point.
         """
         try:
             candidate_embedding = _embed(candidate_path)
@@ -82,6 +96,8 @@ class VoiceBank:
 
         best_id, best_similarity = None, -1.0
         for meta_path in self.directory.glob("*.json"):
+            if meta_path.stem in exclude:
+                continue
             meta = json.loads(meta_path.read_text())
             similarity = _cosine_similarity(candidate_embedding, np.array(meta["embedding"]))
             if similarity > best_similarity:
