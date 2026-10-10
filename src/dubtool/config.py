@@ -52,6 +52,9 @@ class ModelPaths:
     opus_mt_en_trk_model: str = "Helsinki-NLP/opus-mt-en-trk"
     opus_mt_mul_en_model: str = "Helsinki-NLP/opus-mt-mul-en"
     nllb_model: str = "facebook/nllb-200-distilled-600M"  # CC-BY-NC-4.0, opt-in only
+    # Paid cloud API, opt-in only (backends["translate"] = "gemini") — needs
+    # a GEMINI_API_KEY, see backends/translate_gemini.py.
+    gemini_model: str = "gemini-2.5-flash"
     demucs_model: str = "htdemucs"
 
 
@@ -77,16 +80,35 @@ class DubConfig:
     voice_bank_dir: Path | None = Path("voice_bank")
     voice_bank_similarity_threshold: float = 0.75
 
-    # Proper nouns (character/place names, etc.) that matter for both
-    # transcription accuracy and translation fidelity — see
-    # transcribe_whisper.py (passed as an ASR initial_prompt to bias
-    # recognition) and stages/proper_nouns.py (kept verbatim through
-    # translation rather than risking mistranslation/mangling by the MT
-    # model). Empty by default; set via `--names` or a config file. Matters
-    # most for content with names an ASR/MT model has never seen — e.g.
-    # anime character names — where a generic model will otherwise
-    # transcribe/translate them into the nearest common word.
-    proper_nouns: list[str] = field(default_factory=list)
+    # Terms (character/place names, show-specific vocabulary, etc.) that
+    # matter for both transcription accuracy and translation consistency —
+    # see transcribe_whisper.py (keys passed as an ASR initial_prompt to
+    # bias recognition) and stages/glossary.py (each occurrence replaced by
+    # a placeholder before translation and swapped back for the glossary's
+    # own fixed rendering afterward, rather than leaving it to the MT
+    # model's per-call judgment). A name that should just pass through
+    # unchanged is an entry mapping to itself (e.g. {"Gojo": "Gojo"}); a
+    # term that has a real target-language rendering maps to it (e.g.
+    # {"Cursed Energy": "La'nat energiyasi"}) — solves both "the MT model
+    # mangles a name it's never seen" and "the same recurring term gets
+    # translated two different ways in two different segments" (MADLAD has
+    # no memory across calls, so nothing else here would catch that drift).
+    # Empty by default; set via `--names`/`--glossary` or a config file.
+    glossary: dict[str, str] = field(default_factory=dict)
+
+    # On by default: each segment clones its speaker's own voice from a
+    # reference clip extracted from the source audio (stages/reference.py),
+    # instead of every segment using one flat bundled generic voice. This
+    # was briefly the non-default behind --clone-voices while chasing a
+    # "robotic"/flat complaint, but the flatness turned out to trace mostly
+    # to stages/emotion.py being too conservative (see there) — most
+    # segments fell back to zero-shot cloning of the bundled *generic*
+    # reference clip's own flat, neutrally-read prosody, regardless of this
+    # flag. With emotion classification now always assigning a real
+    # delivery style, the earlier reasoning for defaulting this off no
+    # longer holds; disable with --no-clone-voices if you specifically
+    # want the single flat bundled voice back (e.g. for speed).
+    clone_voices: bool = True
 
     keep_intermediate: bool = False
     # None => pipeline.run() allocates a fresh temp dir per run. Different
@@ -96,45 +118,35 @@ class DubConfig:
     # want a fixed, predictable location.
     work_dir: Path | None = None
 
-    # Timing correction happens in two stages now, not one — real testing
-    # showed a single waveform-domain phase-vocoder pass (align.py alone)
-    # sounded "robotic" and "too stretched" even after max_stretch_ratio was
-    # already lowered from 2.0 to 1.25, because that one stage was carrying
-    # the *entire* duration-correction burden:
-    #
-    #   1. pipeline.py synthesizes each segment once at speed=1.0 to measure
-    #      its natural duration, then re-synthesizes at a computed native
-    #      `speed` (clamped to [min_native_speed, max_native_speed]) using
-    #      the TTS backend's own synthesis-time speed control where it has
-    #      one (e.g. mel-spectrogram interpolation ahead of vocoding) —
-    #      this does most of the work and is typically much less
-    #      artifact-prone than stretching a finished waveform.
-    #   2. align.py's waveform-domain phase-vocoder stretch then only needs
-    #      to close whatever small gap remains, bounded tightly by
-    #      [min_stretch_ratio, max_stretch_ratio] — outside that range we
-    #      accept timing drift (the dubbed segment ends early/late relative
-    #      to the original) rather than distort the voice further.
-    #
-    # min/max_stretch_ratio are therefore much tighter than before (used to
-    # bound the *entire* correction; now only the small residual after step
-    # 1).
-    #
-    # Both sets of bounds were tightened further after real anime-dialogue
-    # testing still sounded "stretchy" even under the two-pass scheme: 4 of
-    # 5 segments in that run hit a clamp, and with the old bounds
-    # (0.7-1.5 native, 0.9-1.1 residual) a segment needing heavy correction
-    # could still end up ~1.5x*1.1x ≈ 1.65x off natural pace in the worst
-    # case — both stages maxed out simultaneously, compounding their
-    # artifacts. Dramatic/expressive delivery (anime dialogue, unlike calm
-    # narration) makes even a "modest" 10-50% stretch read as audibly
-    # unnatural. Tightened to prioritize accepting timing drift over
-    # distorting the voice much more aggressively than before — this is a
-    # real tradeoff, not a free lunch: expect more segments to end early/
-    # late relative to the original now.
-    min_native_speed: float = 0.85
-    max_native_speed: float = 1.2
-    min_stretch_ratio: float = 0.95
-    max_stretch_ratio: float = 1.05
+    # Timing. History, because each step was a response to real output:
+    # a single phase-vocoder pass sounded stretched; splitting the work into
+    # a TTS-native speed pass plus a small phase-vocoder residual still put
+    # nearly every line through the vocoder, and lines that didn't fit their
+    # own slot were cut off mid-word in mix.py -- 13 of 16 on a real clip.
+    # The current scheme (stages/timing.py) never truncates: a line gets its
+    # slot plus the pause after it, speeds up only via the TTS, and if it
+    # still runs long the next line waits.
+    # Speed is now chosen against the room a line really has -- its slot plus
+    # the pause after it -- and anything that still doesn't fit makes the
+    # next line wait rather than getting cut off (stages/timing.py). So the
+    # speed range can be gentle: 1.25x is about where CosyVoice2's mel-domain
+    # speed-up starts sounding rushed, and below 0.9x it starts to drawl.
+    min_native_speed: float = 0.9
+    max_native_speed: float = 1.25
+    # Once a line starts more than catchup_after seconds late, it may be
+    # spoken up to max_catchup_speed so the lag shrinks (stages/timing.py).
+    max_catchup_speed: float = 1.4
+    catchup_after: float = 0.3
+    # Waveform time-stretching is off: both bounds at 1.0. It ran nearly
+    # every line through a phase vocoder for at most a 5% timing gain, and
+    # phase-vocoder artifacts are the metallic quality that read as
+    # "robotic". Widen these only for lip-sync-critical content, knowing the
+    # cost. Kept as knobs so an existing YAML that sets them still loads.
+    min_stretch_ratio: float = 1.0
+    max_stretch_ratio: float = 1.0
+    # Silence kept between two lines when one has to wait for the other, so
+    # back-to-back lines from different characters don't run together.
+    min_line_gap: float = 0.08
 
     # None (the default) means: don't force a delivery style, clone the
     # reference speaker's own natural prosody instead (see
@@ -182,7 +194,15 @@ class DubConfig:
     def _from_dict(cls, raw: dict[str, Any]) -> "DubConfig":
         raw = dict(raw)
         models_raw = raw.pop("models", {})
+        # `backends` is merged onto the defaults rather than replacing the
+        # dict wholesale -- a config that only wants to override one entry
+        # (e.g. `backends: {translate: gemini}`) shouldn't silently drop
+        # every other key (tts/transcribe/diarize/separate), which would
+        # otherwise surface later as a bare KeyError in registry.py.
+        backends_raw = raw.pop("backends", None)
         cfg = cls(**{k: v for k, v in raw.items() if k != "models"})
+        if backends_raw:
+            cfg.backends = {**cfg.backends, **backends_raw}
         if models_raw:
             cfg.models = ModelPaths(**models_raw)
         _coerce_paths(cfg)

@@ -61,3 +61,10 @@ def has_video_stream(path: Path) -> bool:
         line.strip() and line.strip().split(",")[-1] != "1"
         for line in result.stdout.splitlines()
     )
+
+
+def audio_duration(path: Path) -> float:
+    """Length of an audio file in seconds, read from its header."""
+    import soundfile as sf
+
+    return float(sf.info(str(path)).duration)

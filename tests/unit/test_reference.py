@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 from dubtool.stages.reference import extract_reference_clips, extract_segment_reference
@@ -194,3 +195,113 @@ def test_segment_reference_caps_at_max_duration(tmp_path):
 
     assert clip is not None
     assert abs((clip.end - clip.start) - 5.0) < 1e-6
+
+
+def test_short_segment_widens_its_window_when_given_speaker_bounds(tmp_path):
+    # Most anime lines are short: 8 of 13 segments in a real test clip were
+    # under 1.5s. Refusing all of them sent nearly every line to one shared
+    # speaker-level clip, which is what made a finished dub sound like a
+    # single monotone voice despite per-segment cloning being on.
+    sr = 16000
+    data = _voiced(3.0, sr)
+    vocals_path = _write_wav(tmp_path / "vocals.wav", data, sr)
+    seg = Segment(start=1.0, end=1.5, speaker_id="SPEAKER_00", text="hi")
+
+    clip = extract_segment_reference(
+        seg, vocals_path, tmp_path / "ref.wav",
+        min_duration=1.5, pad_bounds=(0.0, 3.0),
+    )
+
+    assert clip is not None
+    assert (clip.end - clip.start) >= 1.5 - 1e-6
+
+
+def test_widening_stays_inside_the_speakers_own_region(tmp_path):
+    # The bound is the point the next character starts talking. Crossing it
+    # would clone the wrong voice -- silently, and worse than a monotone.
+    sr = 16000
+    data = _voiced(5.0, sr)
+    vocals_path = _write_wav(tmp_path / "vocals.wav", data, sr)
+    seg = Segment(start=2.4, end=2.8, speaker_id="SPEAKER_00", text="hi")
+
+    clip = extract_segment_reference(
+        seg, vocals_path, tmp_path / "ref.wav",
+        min_duration=1.5, pad_bounds=(1.5, 3.2),
+    )
+
+    assert clip is not None
+    assert clip.start >= 1.5 - 1e-6
+    assert clip.end <= 3.2 + 1e-6
+
+
+def test_refuses_to_widen_when_the_whole_turn_is_still_too_short(tmp_path):
+    sr = 16000
+    data = _voiced(3.0, sr)
+    vocals_path = _write_wav(tmp_path / "vocals.wav", data, sr)
+    seg = Segment(start=1.0, end=1.3, speaker_id="SPEAKER_00", text="hi")
+
+    assert extract_segment_reference(
+        seg, vocals_path, tmp_path / "ref.wav",
+        min_duration=1.5, pad_bounds=(0.9, 1.6),      # only 0.7s of speaker audio
+    ) is None
+
+
+
+def _voiced(seconds, sr, freq=160.0):
+    """Periodic, harmonic, with slow vibrato -- the way voiced speech is."""
+    t = np.arange(int(seconds * sr)) / sr
+    phase = 2 * np.pi * np.cumsum(freq * (1 + 0.02 * np.sin(2 * np.pi * 3 * t))) / sr
+    return (0.3 * (np.sin(phase) + 0.5 * np.sin(2 * phase))).astype(np.float32)
+
+
+def _unvoiced(seconds, sr, seed=0):
+    return (0.2 * np.random.default_rng(seed).standard_normal(int(seconds * sr))).astype(np.float32)
+
+
+def test_a_line_whose_audio_is_not_voiced_speech_is_refused_as_a_reference(tmp_path):
+    # Four lines of a real clip were 0% voiced in the separated vocals --
+    # shouts over effects, or boundaries that missed the words. A take
+    # cloned from one failed three attempts in a row.
+    sr = 16000
+    vocals_path = _write_wav(tmp_path / "vocals.wav", _unvoiced(3.0, sr), sr)
+    seg = Segment(start=0.5, end=2.5, speaker_id="SPEAKER_00", text="You're so right!")
+
+    assert extract_segment_reference(seg, vocals_path, tmp_path / "ref.wav") is None
+
+
+def test_montage_joins_a_speakers_short_lines(tmp_path):
+    from dubtool.stages.reference import speaker_montage
+    sr = 16000
+    data = np.zeros(int(6.0 * sr), dtype=np.float32)
+    data[int(0.5 * sr):int(1.3 * sr)] = _voiced(0.8, sr)
+    data[int(4.0 * sr):int(4.9 * sr)] = _voiced(0.9, sr)
+    vocals_path = _write_wav(tmp_path / "vocals.wav", data, sr)
+    segments = [
+        Segment(start=0.5, end=1.3, speaker_id="A", text="first"),
+        Segment(start=2.0, end=3.0, speaker_id="B", text="someone else"),
+        Segment(start=4.0, end=4.9, speaker_id="A", text="second"),
+    ]
+
+    clip = speaker_montage("A", segments, vocals_path, tmp_path / "m.wav")
+
+    assert clip is not None
+    joined, _ = sf.read(str(clip.path))
+    assert len(joined) / sr == pytest.approx(0.8 + 0.08 + 0.9, abs=0.01)   # only A's lines
+    assert clip.text == "first second"
+
+
+def test_montage_leaves_out_lines_that_are_not_voiced_speech(tmp_path):
+    # Without this, a speaker whose only lines are shouts over effects got
+    # a reference made of noise -- worse than the robot voice it replaced.
+    from dubtool.stages.reference import speaker_montage
+    sr = 16000
+    data = np.zeros(int(4.0 * sr), dtype=np.float32)
+    data[int(0.0 * sr):int(1.0 * sr)] = _unvoiced(1.0, sr)
+    data[int(2.0 * sr):int(3.0 * sr)] = _unvoiced(1.0, sr, seed=1)
+    vocals_path = _write_wav(tmp_path / "vocals.wav", data, sr)
+    segments = [
+        Segment(start=0.0, end=1.0, speaker_id="A", text="Are you for real?"),
+        Segment(start=2.0, end=3.0, speaker_id="A", text="You're so right!"),
+    ]
+
+    assert speaker_montage("A", segments, vocals_path, tmp_path / "m.wav") is None

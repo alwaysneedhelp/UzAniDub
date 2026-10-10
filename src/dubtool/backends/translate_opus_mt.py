@@ -74,7 +74,15 @@ class OpusMtTranslator:
             output_ids = model.generate(**inputs, max_new_tokens=512)
         return tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
 
-    def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+    def translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        target_duration: float | None = None,
+    ) -> str:
+        # target_duration is accepted and ignored: a seq2seq NMT model has no length control to offer.
+        # Only an instruction-following backend can be asked to fit a slot.
         if not text.strip():
             return ""
 

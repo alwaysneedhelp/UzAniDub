@@ -10,15 +10,20 @@ log = logging.getLogger(__name__)
 
 def mux(video_path: Path, audio_path: Path, out_path: Path) -> Path:
     """Replaces the original video's audio track with the dubbed one via
-    ffmpeg, copying the video stream untouched (no re-encode)."""
+    ffmpeg, copying the video stream untouched (no re-encode).
+
+    No `-shortest`: lines are never cut short (see stages/timing.py), and
+    that includes a final line that runs a moment past the last frame --
+    `-shortest` would have clipped exactly that line. 192k because the
+    soundtrack is now stereo at the background's native rate; ffmpeg's
+    default AAC bitrate is too thin for music."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg", "-y",
         "-i", str(video_path),
         "-i", str(audio_path),
         "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "copy", "-c:a", "aac",
-        "-shortest",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
         str(out_path),
     ]
     log.debug("running: %s", " ".join(cmd))

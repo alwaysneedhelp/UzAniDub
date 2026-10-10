@@ -61,6 +61,10 @@ class Segment:
     reference_text: str = ""  # transcript of reference_audio, for zero-shot prosody cloning
     synthesized_audio: np.ndarray | None = None
     synthesized_sr: int | None = None
+    # Where the dubbed line actually begins on the output timeline. Equal to
+    # `start` unless the previous line was still being spoken, in which case
+    # it waits (see stages/timing.py) -- lines are never cut short to fit.
+    placed_start: float | None = None
 
     @property
     def duration(self) -> float:

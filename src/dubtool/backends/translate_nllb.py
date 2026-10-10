@@ -29,7 +29,15 @@ class NLLBTranslator:
         self._model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
         self._model.eval()
 
-    def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+    def translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        target_duration: float | None = None,
+    ) -> str:
+        # target_duration is accepted and ignored: a seq2seq NMT model has no length control to offer.
+        # Only an instruction-following backend can be asked to fit a slot.
         import torch
 
         if not text.strip():

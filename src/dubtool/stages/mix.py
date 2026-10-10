@@ -1,5 +1,5 @@
-"""Combines aligned per-segment synthesized speech with the separated
-background track into one final mono audio file."""
+"""Lays the dubbed lines over the separated background (music + effects)
+to produce the final soundtrack."""
 from __future__ import annotations
 
 import logging
@@ -9,6 +9,7 @@ import librosa
 import numpy as np
 import soundfile as sf
 
+from dubtool.stages import timing
 from dubtool.types import Segment
 
 log = logging.getLogger(__name__)
@@ -19,48 +20,58 @@ def mix_segments(
     background_path: Path,
     out_path: Path,
     sample_rate: int,
+    min_gap: float = 0.08,
 ) -> Path:
-    """Places each segment's aligned synthesized audio at its original
-    timestamp on a silent timeline, then sums with the separated background
-    track (resampled/downmixed to `sample_rate`, the TTS output rate, which
-    is the pipeline's working rate for the final mix).
+    """Places every line, in full, over the background track.
 
-    Step 2 downmixes background to mono for simplicity; preserving stereo
-    background is a reasonable follow-up enhancement, not required for the
-    MVP.
+    `sample_rate` is the rate of the synthesized lines. The output keeps the
+    *background's* rate and channel count -- the background is the original
+    music and effects, and it used to be downmixed to mono and resampled to
+    the TTS's 24kHz before the voice went on top, which dulled the whole
+    soundtrack next to the original. The voice is resampled up to meet it
+    instead, and sits in the centre of every channel.
+
+    Nothing is ever truncated. A line starts at `placed_start` (set by the
+    pipeline's timing planner) or its original `start`, and if the line
+    before it is still being spoken it waits -- the same rule the planner
+    used (timing.place), so the start a speed was chosen for is the start
+    that's heard. This replaces cutting a line off at the next line's start,
+    which is what made dubbed dialogue sound like it was skipping words.
     """
-    background, bg_sr = sf.read(str(background_path), dtype="float32", always_2d=False)
-    if background.ndim > 1:
-        background = background.mean(axis=1)
-    if bg_sr != sample_rate:
-        background = librosa.resample(background, orig_sr=bg_sr, target_sr=sample_rate)
+    background, bg_sr = sf.read(str(background_path), dtype="float32", always_2d=True)
 
-    total_len = max(
-        len(background),
-        max((int(s.end * sample_rate) for s in segments), default=0),
-    )
-    vocal_track = np.zeros(total_len, dtype=np.float32)
-
-    for seg in segments:
+    placements: list[tuple[int, np.ndarray]] = []
+    previous_end = float("-inf")
+    for seg in sorted(segments, key=lambda s: s.start):
         if seg.synthesized_audio is None or len(seg.synthesized_audio) == 0:
             continue
-        start_sample = int(seg.start * sample_rate)
-        end_sample = start_sample + len(seg.synthesized_audio)
-        if end_sample > len(vocal_track):
-            vocal_track = np.pad(vocal_track, (0, end_sample - len(vocal_track)))
-        vocal_track[start_sample:end_sample] += seg.synthesized_audio
+        voice = seg.synthesized_audio.astype(np.float32)
+        if sample_rate != bg_sr:
+            voice = librosa.resample(voice, orig_sr=sample_rate, target_sr=bg_sr).astype(np.float32)
 
-    if len(background) < len(vocal_track):
-        background = np.pad(background, (0, len(vocal_track) - len(background)))
-    else:
-        vocal_track = np.pad(vocal_track, (0, len(background) - len(vocal_track)))
+        wanted = seg.placed_start if seg.placed_start is not None else seg.start
+        start = timing.place(wanted, previous_end, min_gap)
+        if start - wanted > 0.01:
+            log.info(
+                "line at %.2fs moved to %.2fs so the line before it can finish",
+                wanted, start,
+            )
+        placements.append((int(round(start * bg_sr)), voice))
+        previous_end = start + len(voice) / bg_sr
 
-    mixed = vocal_track + background
-    peak = float(np.abs(mixed).max()) if len(mixed) else 0.0
+    total = max(len(background), max((s + len(v) for s, v in placements), default=0))
+    vocal = np.zeros(total, dtype=np.float32)
+    for start_sample, voice in placements:
+        vocal[start_sample:start_sample + len(voice)] += voice
+    if len(background) < total:
+        background = np.pad(background, ((0, total - len(background)), (0, 0)))
+
+    mixed = background + vocal[:, None]
+    peak = float(np.abs(mixed).max()) if mixed.size else 0.0
     if peak > 0.98:
         log.warning("mixed output peak %.3f exceeds 0.98; scaling down to avoid clipping", peak)
         mixed = mixed * (0.98 / peak)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(out_path), mixed, sample_rate)
+    sf.write(str(out_path), mixed[:, 0] if mixed.shape[1] == 1 else mixed, bg_sr)
     return out_path

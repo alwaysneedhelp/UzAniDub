@@ -1,4 +1,10 @@
 .venv/
+
+# Local secrets. README tells you to put HF_TOKEN here, and this repo is
+# public — without this line a token lands in the first `git add -A`.
+.env
+.env.*
+!.env.example
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -30,3 +36,18 @@ poc/*
 
 # Local test media dropped in the repo root
 /*.mp3
+
+# Scratch directory voice_clone_test.py writes into (extracted audio,
+# Demucs stems, sliced references, synthesized output). Regenerated on
+# every run and derived from user-supplied media -- same concern as
+# voice_bank/ above.
+work/
+
+# Real source clips dropped at the repo root to try the tool on (JJK.mp4,
+# "Naruto scene.mp4", ...). Copyrighted, not ours to redistribute, and a
+# new one appears under a different name each time -- so ignore the whole
+# pattern rather than naming files. Root-anchored so the synthetic
+# tests/integration fixture still tracks.
+/*.mp4
+/*.mkv
+/*.mov

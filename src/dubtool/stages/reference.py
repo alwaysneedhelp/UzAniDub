@@ -27,9 +27,17 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from dubtool.stages.takes import voiced_fraction
 from dubtool.types import ReferenceClip, Segment
 
 log = logging.getLogger(__name__)
+
+# A cloning reference must actually contain voiced speech. Cloning copies
+# whatever the reference is, so a stretch that is a scream over effects, or
+# a boundary that missed the words, makes the TTS produce noise -- on a real
+# clip four lines' own audio was 0% voiced, and a take cloned from one of
+# them failed all three attempts. Healthy dialogue there ran 42-79% voiced.
+MIN_REFERENCE_VOICED = 0.3
 
 
 def extract_reference_clips(
@@ -48,7 +56,8 @@ def extract_reference_clips(
     (with `.text` left empty — the caller fills it in once transcription
     data covering the clip's time range is available); a speaker with no
     window of at least `min_duration` clean seconds is omitted — the caller
-    falls back to the bundled default reference voice for them.
+    then clones their lines from their own audio, or from speaker_montage(),
+    before ever reaching the bundled default voice.
 
     If `raw_audio_path` and `background_path` are both given and the
     background track's energy in the chosen window is low relative to the
@@ -93,10 +102,10 @@ def extract_reference_clips(
     for speaker_id, speaker_segments in by_speaker.items():
         window = _best_window(data, sr, speaker_segments, target_duration, min_duration, hop)
         if window is None:
-            log.warning(
-                "not enough clean speech to build a reference clip for %s; "
-                "falling back to the default reference voice for them",
-                speaker_id,
+            log.info(
+                "no single %.0fs+ stretch of %s to use as their reference clip; their "
+                "lines will clone from their own audio, or all of their lines joined",
+                min_duration, speaker_id,
             )
             continue
         clip_data, start_sample = window
@@ -112,6 +121,10 @@ def extract_reference_clips(
                         "(background energy negligible in that window)", speaker_id,
                     )
                     clip_data = raw_audio[start_sample:end_sample]
+
+        if voiced_fraction(clip_data, sr) < MIN_REFERENCE_VOICED:
+            log.info("best window for %s isn't voiced speech; not using it as their reference", speaker_id)
+            continue
 
         path = out_dir / f"reference_{speaker_id}.wav"
         sf.write(str(path), clip_data, sr)
@@ -130,6 +143,7 @@ def extract_segment_reference(
     min_duration: float = 1.5,
     max_duration: float = 10.0,
     background_energy_ratio: float = 0.1,
+    pad_bounds: tuple[float, float] | None = None,
 ) -> ReferenceClip | None:
     """Uses a single segment's *own* original-language audio as its voice-
     cloning reference, instead of one fixed clip reused for every line a
@@ -155,8 +169,39 @@ def extract_segment_reference(
 
     start_sample = max(0, int(segment.start * sr))
     end_sample = min(len(data), int(segment.end * sr))
+
     if end_sample - start_sample < int(min_duration * sr):
-        return None
+        # A line too short to be its own reference used to return None and
+        # fall back to the speaker-level clip. On real anime dialogue most
+        # lines are short -- 8 of 13 segments in a test clip were under 1.5s
+        # -- and whenever diarization also collapses most turns onto one
+        # speaker, nearly every line ends up cloning the *same* reference.
+        # That is what makes a finished dub sound like one monotone voice
+        # even with per-segment cloning switched on.
+        #
+        # So widen the window instead of discarding the line. The audio
+        # immediately around a line is the same character still speaking (or
+        # silence), which is a perfectly good sample of their voice -- as
+        # long as it stops before the neighbouring speaker starts, which is
+        # what pad_bounds carries.
+        if pad_bounds is None:
+            # Widening needs to know where this speaker's audio ends. Without
+            # that, padding could run straight into the next character and
+            # clone the wrong voice -- a worse outcome than the monotone this
+            # is meant to fix, and a silent one. Refuse instead.
+            return None
+        need = int(min_duration * sr)
+        centre = (start_sample + end_sample) // 2
+        low = max(0, int(pad_bounds[0] * sr))
+        high = min(len(data), int(pad_bounds[1] * sr))
+        if high - low < need:
+            return None          # even the whole turn is too short to use
+        padded_start = max(low, centre - need // 2)
+        padded_end = min(high, padded_start + need)
+        padded_start = max(low, padded_end - need)
+        if padded_end - padded_start < need:
+            return None
+        start_sample, end_sample = padded_start, padded_end
 
     max_len = int(max_duration * sr)
     if end_sample - start_sample > max_len:
@@ -178,6 +223,9 @@ def extract_segment_reference(
             bg_rms = float(np.sqrt(np.mean(bg[start_sample:end_sample] ** 2)))
             if vocal_rms > 0 and bg_rms < background_energy_ratio * vocal_rms:
                 clip_data = raw[start_sample:end_sample]
+
+    if voiced_fraction(clip_data, sr) < MIN_REFERENCE_VOICED:
+        return None  # not voiced speech: let the caller try another reference
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(out_path), clip_data, sr)
@@ -266,3 +314,77 @@ def _dynamic_range(window: np.ndarray, frame_len: int) -> float:
     if len(frame_rms) < 2 or np.mean(frame_rms) == 0:
         return 0.0
     return float(np.std(frame_rms) / np.mean(frame_rms))
+
+
+def speaker_montage(
+    speaker_id: str,
+    segments: list[Segment],
+    vocals_path: Path,
+    out_path: Path,
+    raw_audio_path: Path | None = None,
+    background_path: Path | None = None,
+    min_duration: float = 0.6,
+    max_duration: float = 10.0,
+    gap: float = 0.08,
+    background_energy_ratio: float = 0.1,
+) -> ReferenceClip | None:
+    """Every line one speaker has, joined end to end into one reference.
+
+    The fallback below a speaker's own clips and above the bundled default
+    voice. extract_reference_clips() needs one *contiguous* window of 4s+,
+    and extract_segment_reference() needs 1.5s from a single line, so a
+    character whose lines are all short got neither -- and fell through to
+    assets/default_reference.wav, which is macOS `say` output. On a real
+    clip that was 4 of 16 lines cloned from a robot voice: the single most
+    direct cause of a dub sounding "like Google Translate". Their own
+    scattered lines, joined, are the right voice and real human timbre.
+
+    Each line comes from the raw pre-separation audio where Demucs had
+    little to remove there, for the same reason extract_reference_clips()
+    does: cloning copies a separation artifact into every line it voices.
+    """
+    data, sr = sf.read(str(vocals_path), dtype="float32", always_2d=False)
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    raw = bg = None
+    if raw_audio_path is not None and background_path is not None:
+        bg_data, bg_sr = sf.read(str(background_path), dtype="float32", always_2d=False)
+        raw_data, raw_sr = sf.read(str(raw_audio_path), dtype="float32", always_2d=False)
+        if bg_sr == sr and raw_sr == sr:
+            bg = bg_data.mean(axis=1) if bg_data.ndim > 1 else bg_data
+            raw = raw_data.mean(axis=1) if raw_data.ndim > 1 else raw_data
+
+    pieces: list[np.ndarray] = []
+    texts: list[str] = []
+    total = 0
+    mine = sorted((s for s in segments if s.speaker_id == speaker_id), key=lambda s: s.start)
+    for seg in mine:
+        a, b = max(0, int(seg.start * sr)), min(len(data), int(seg.end * sr))
+        if b <= a:
+            continue
+        piece = data[a:b]
+        if raw is not None and b <= len(raw) and b <= len(bg):
+            vocal_rms = float(np.sqrt(np.mean(piece**2)))
+            bg_rms = float(np.sqrt(np.mean(bg[a:b] ** 2)))
+            if vocal_rms > 0 and bg_rms < background_energy_ratio * vocal_rms:
+                piece = raw[a:b]
+        if float(np.abs(piece).max()) > 0.99:
+            continue  # clipped: unreliable as a voice sample
+        if voiced_fraction(piece, sr) < MIN_REFERENCE_VOICED:
+            continue  # a shout over effects or a missed boundary, not their voice
+        pieces.append(piece)
+        texts.append(seg.text)
+        total += len(piece)
+        if total >= int(max_duration * sr):
+            break
+
+    if total < int(min_duration * sr):
+        return None
+    silence = np.zeros(int(gap * sr), dtype=np.float32)
+    joined = np.concatenate([part for piece in pieces for part in (piece, silence)][:-1])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out_path), joined, sr)
+    return ReferenceClip(
+        path=out_path, start=mine[0].start, end=mine[-1].end,
+        text=" ".join(t for t in texts if t).strip(),
+    )

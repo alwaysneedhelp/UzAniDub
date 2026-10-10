@@ -1,0 +1,86 @@
+# Glossary for Jujutsu Kaisen (JJK), for use with --glossary.
+#
+# Researched from the Jujutsu Kaisen Fandom wiki and Wikipedia (character
+# list, terminology/glossary categories) since no official Uzbek dub or
+# localization of the show exists to draw fixed terms from. Uzbek renderings
+# for terminology below are original working translations, not an official
+# source — treat them as a reasonable, *consistent* starting point (the
+# actual point of a glossary: the same term comes out the same way in every
+# segment, since MADLAD has no memory across translate() calls) rather than
+# a claim of definitive canon. Feel free to edit any translation below; the
+# mechanism (stages/glossary.py) enforces whatever this file says, verbatim,
+# every time that term appears.
+#
+# Format: source term (English, as it'll appear in the transcript) -> fixed
+# Uzbek rendering. A name that should just pass through unchanged (not
+# translated) maps to itself.
+
+# --- Characters (kept verbatim — same mechanism as --names) ---
+Yuji Itadori: Yuji Itadori
+Megumi Fushiguro: Megumi Fushiguro
+Nobara Kugisaki: Nobara Kugisaki
+Satoru Gojo: Satoru Gojo
+Gojo: Gojo
+Sukuna: Sukuna
+Ryomen Sukuna: Ryomen Sukuna
+Maki Zenin: Maki Zenin
+Toge Inumaki: Toge Inumaki
+Panda: Panda
+Yuta Okkotsu: Yuta Okkotsu
+Kinji Hakari: Kinji Hakari
+Kento Nanami: Kento Nanami
+Nanami: Nanami
+Kenjaku: Kenjaku
+Suguru Geto: Suguru Geto
+Geto: Geto
+Mahito: Mahito
+Jogo: Jogo
+Choso: Choso
+Toji Fushiguro: Toji Fushiguro
+Shoko Ieiri: Shoko Ieiri
+Aoi Todo: Aoi Todo
+Todo: Todo
+Noritoshi Kamo: Noritoshi Kamo
+Mai Zenin: Mai Zenin
+Naobito Zenin: Naobito Zenin
+Naoya Zenin: Naoya Zenin
+Yuki Tsukumo: Yuki Tsukumo
+Masamichi Yaga: Masamichi Yaga
+Utahime Iori: Utahime Iori
+Momo Nishimiya: Momo Nishimiya
+Mei Mei: Mei Mei
+
+# --- Places (kept verbatim) ---
+Tokyo Jujutsu High: Tokyo Jujutsu High
+Kyoto Jujutsu High: Kyoto Jujutsu High
+Shibuya: Shibuya
+Sendai: Sendai
+
+# --- Terminology (translated, fixed) ---
+Jujutsu: Yuzyutsu
+Jujutsu Sorcerer: Yuzyutsu jodugari
+Cursed Energy: La'nat energiyasi
+Cursed Technique: La'nat texnikasi
+Cursed Spirit: La'nat ruhi
+Curse: La'nat
+Cursed Object: La'nat buyumi
+Domain Expansion: Hudud kengaytmasi
+Innate Domain: Tug'ma hudud
+Simple Domain: Oddiy hudud
+Six Eyes: Olti ko'z
+Limitless: Cheksizlik
+Infinity: Cheksiz to'siq
+"Hollow Technique: Purple": "Bo'sh texnika: Binafsha"
+Unlimited Void: Cheksiz bo'shliq
+Ten Shadows Technique: O'nta soya texnikasi
+Divine Dogs: Ilohiy itlar
+Straw Doll Technique: Somon qo'g'irchoq texnikasi
+Black Flash: Qora chaqmoq
+Reverse Cursed Technique: Teskari la'nat texnikasi
+Malevolent Shrine: Yovuz ibodatxona
+Special Grade: Maxsus daraja
+Grade 1 Sorcerer: Birinchi darajali jodugar
+Grade 2 Sorcerer: Ikkinchi darajali jodugar
+Grade 3 Sorcerer: Uchinchi darajali jodugar
+Grade 4 Sorcerer: To'rtinchi darajali jodugar
+Death Painting: O'lim rasmi
