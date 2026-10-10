@@ -31,6 +31,17 @@ import re
 log = logging.getLogger(__name__)
 
 
+def term_pattern(term: str) -> re.Pattern[str]:
+    """A glossary term as a whole word or phrase, plus an English plural.
+
+    Matching anywhere used to find "Curse" inside "Cursed" and leave the
+    remainder glued to the fixed rendering ("La'natd"), and to turn "Cursed
+    Spirits" into "La'nat ruhis". Lookarounds rather than \\b so a term that
+    starts or ends with punctuation still matches; a possessive's apostrophe
+    isn't a word character, so "Gojo's" still protects "Gojo"."""
+    return re.compile(rf"(?<!\w){re.escape(term)}(?:e?s)?(?!\w)", re.IGNORECASE)
+
+
 def protect(text: str, glossary: dict[str, str]) -> tuple[str, dict[str, str]]:
     """Returns (text with known terms replaced by placeholders,
     {placeholder: fixed_target_translation}) — `restore()` below puts the
@@ -48,7 +59,7 @@ def protect(text: str, glossary: dict[str, str]) -> tuple[str, dict[str, str]]:
         if not term.strip():
             continue
         placeholder = f"XPRESERVEDTERM{i}X"
-        pattern = re.compile(re.escape(term), re.IGNORECASE)
+        pattern = term_pattern(term)
         if pattern.search(protected):
             protected = pattern.sub(placeholder, protected)
             mapping[placeholder] = translation

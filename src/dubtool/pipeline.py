@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import re
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -39,6 +40,7 @@ from dubtool.stages import (
     timing,
     voice_bank,
 )
+from dubtool.stages import glossary as glossary_stage
 from dubtool.types import DubbingResult, ReferenceClip, Segment
 
 log = logging.getLogger("dubtool.pipeline")
@@ -236,10 +238,7 @@ def run(
     # diarized turns, not an ASR pass standing in for them.
     full_text = " ".join(seg.text for seg in segments)
     detected_names = auto_names.detect_names(full_text)
-    new_names = [
-        n for n in detected_names
-        if n.lower() not in (t.lower() for t in config.glossary)
-    ]
+    new_names = _names_not_in_glossary(detected_names, config.glossary)
     if new_names:
         log.info("auto-detected new name(s), re-transcribing with them as a hint: %s", new_names)
         segments = backends.transcriber.transcribe(vocals_path, diarized_segments, extra_proper_nouns=new_names)
@@ -462,6 +461,32 @@ def run(
         _cleanup(work_dir, keep={final_audio})
 
     return DubbingResult(output_video=actual_output, segments=segments, intermediate_dir=work_dir if config.keep_intermediate else None)
+
+
+_LEADING_ARTICLE = re.compile(r"^(?:the|a|an)\s+", re.IGNORECASE)
+
+
+def _names_not_in_glossary(detected: list[str], glossary: dict[str, str]) -> list[str]:
+    """Auto-detected names worth adding, as pass-through glossary entries.
+
+    A detected name loses a leading article, and is dropped if it overlaps
+    a term the glossary already has. Detection returned "the Reverse Cursed
+    Technique"; the article kept it from matching the existing entry, so it
+    was added as a new verbatim name -- and being the longer term, it then
+    won over the real translation, leaving English mid-sentence in the dub:
+    "...barcha e'tiborimni the Reverse Cursed Technique ga qaratdim"."""
+    kept: list[str] = []
+    for name in detected:
+        name = _LEADING_ARTICLE.sub("", name).strip()
+        if not name:
+            continue
+        overlaps = any(
+            glossary_stage.term_pattern(term).search(name) or glossary_stage.term_pattern(name).search(term)
+            for term in glossary
+        )
+        if not overlaps and name.lower() not in (k.lower() for k in kept):
+            kept.append(name)
+    return kept
 
 
 def _synthesize_take(

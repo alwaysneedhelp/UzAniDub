@@ -99,3 +99,20 @@ def test_a_longer_term_is_not_consumed_by_a_shorter_one_inside_it():
     }
     protected, mapping = protect("Reverse Cursed Technique.", glossary)
     assert restore(protected, mapping) == "Teskari la'nat texnikasi."
+
+
+def test_a_term_is_not_matched_inside_a_longer_word():
+    # "Curse" matched inside "Cursed" and left "La'natd" in the line.
+    protected, mapping = protect("you're cursed", {"Curse": "La'nat"})
+    assert restore(protected, mapping) == "you're cursed"
+
+
+def test_an_english_plural_is_absorbed_into_the_term():
+    # Used to come out as "La'nat ruhis".
+    protected, mapping = protect("two Cursed Spirits", {"Cursed Spirit": "La'nat ruhi"})
+    assert restore(protected, mapping) == "two La'nat ruhi"
+
+
+def test_a_possessive_still_protects_the_name():
+    protected, _ = protect("Gojo's eyes", {"Gojo": "Gojo"})
+    assert "Gojo" not in protected
