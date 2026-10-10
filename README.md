@@ -227,15 +227,7 @@ with CosyVoice2; newer main-branch changes may need adaptation.
 
 Multiple speakers work without a token, using the ungated diarizer; set
 `HF_TOKEN` after accepting the pyannote terms for better turn boundaries (see
-[Optional: pyannote diarization](#optional-pyannote-diarization)). The workbench
-shows which local components are available; missing models produce an error
-rather than a synthetic example.
-
-In one PowerShell terminal, from the repository root:
-
-```powershell
-.\.venv\Scripts\python.exe run_engine.py
-```
+[Optional: pyannote diarization](#optional-pyannote-diarization)).
 
 This checkout has a local `.venv` prepared for Windows. For a fresh Python
 environment, install the dependencies in `pyproject.toml` first. On Windows,
@@ -243,9 +235,9 @@ environment, install the dependencies in `pyproject.toml` first. On Windows,
 checkout uses the [prebuilt WebRTC VAD wheel](https://pypi.org/project/webrtcvad-wheels/)
 and installs `resemblyzer` without its dependencies. It also uses `pyworld`
 0.3.5 on Windows to avoid a NumPy binary mismatch. Use the same environment
-for the CLI and engine.
+for the CLI.
 
-In a second terminal:
+To run the website:
 
 ```powershell
 cd site
@@ -255,20 +247,21 @@ npx wrangler d1 execute DB --local --config wrangler.local.jsonc --persist-to .w
 npm run dev
 ```
 
-Apply each migration only once to a given local database. Open
-`http://localhost:3000/create`. Short test scenes are limited to 512 MB in the
-web workbench; the CLI is better for full episodes:
+Apply each migration only once to a given local database, then open
+`http://localhost:3000` (the dev server picks the next free port if 3000 is
+taken; the terminal shows the actual URL). Add anime and episodes at
+`/upload`.
+
+Dub an episode with the CLI, then publish the result through the upload page:
 
 ```powershell
 .\.venv\Scripts\dubtool.exe input.mp4 -o output/episode-01.mp4 --names "Naruto,Pain"
 ```
 
-The web engine binds to `127.0.0.1:8765` and keeps test inputs and results in
-ignored `output/web-jobs/`. It does not publish them. The private hosted site
-can use this engine when opened on the same computer; the browser may ask for
-local network access. For other devices, hosted dubbing needs a separate,
-authenticated model server because Cloudflare Workers cannot run these Python
-models. Publishing finished videos is handled by the site.
+`run_engine.py` starts a separate loopback HTTP service on `127.0.0.1:8765`
+for running the dubbing models (short scenes up to 512 MB, results kept in
+ignored `output/web-jobs/`). The website does not use it, and Cloudflare
+Workers cannot run these Python models, so dubbing stays local.
 
 See [the site guide](site/README.md), [voice model guide](docs/own-voice-model.md),
 and [model licenses](THIRD_PARTY_LICENSES.md).
