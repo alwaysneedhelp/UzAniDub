@@ -27,9 +27,17 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from dubtool.stages.takes import voiced_fraction
 from dubtool.types import ReferenceClip, Segment
 
 log = logging.getLogger(__name__)
+
+# A cloning reference must actually contain voiced speech. Cloning copies
+# whatever the reference is, so a stretch that is a scream over effects, or
+# a boundary that missed the words, makes the TTS produce noise -- on a real
+# clip four lines' own audio was 0% voiced, and a take cloned from one of
+# them failed all three attempts. Healthy dialogue there ran 42-79% voiced.
+MIN_REFERENCE_VOICED = 0.3
 
 
 def extract_reference_clips(
@@ -113,6 +121,10 @@ def extract_reference_clips(
                         "(background energy negligible in that window)", speaker_id,
                     )
                     clip_data = raw_audio[start_sample:end_sample]
+
+        if voiced_fraction(clip_data, sr) < MIN_REFERENCE_VOICED:
+            log.info("best window for %s isn't voiced speech; not using it as their reference", speaker_id)
+            continue
 
         path = out_dir / f"reference_{speaker_id}.wav"
         sf.write(str(path), clip_data, sr)
@@ -211,6 +223,9 @@ def extract_segment_reference(
             bg_rms = float(np.sqrt(np.mean(bg[start_sample:end_sample] ** 2)))
             if vocal_rms > 0 and bg_rms < background_energy_ratio * vocal_rms:
                 clip_data = raw[start_sample:end_sample]
+
+    if voiced_fraction(clip_data, sr) < MIN_REFERENCE_VOICED:
+        return None  # not voiced speech: let the caller try another reference
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(out_path), clip_data, sr)
@@ -355,6 +370,8 @@ def speaker_montage(
                 piece = raw[a:b]
         if float(np.abs(piece).max()) > 0.99:
             continue  # clipped: unreliable as a voice sample
+        if voiced_fraction(piece, sr) < MIN_REFERENCE_VOICED:
+            continue  # a shout over effects or a missed boundary, not their voice
         pieces.append(piece)
         texts.append(seg.text)
         total += len(piece)
