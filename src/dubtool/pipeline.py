@@ -380,6 +380,19 @@ def run(
     stretch_enabled = config.min_stretch_ratio < 1.0 or config.max_stretch_ratio > 1.0
     previous_end = float("-inf")
     late_lines, worst_delay = 0, 0.0
+    # Each line's loudness follows the actor's delivery of it -- a shout
+    # lands as a shout -- instead of one of a few fixed levels within 2dB of
+    # each other (see stages/loudness.py).
+    actor_levels = loudness.actor_targets(segments, vocals_path)
+    # Intensity: how hard the actor delivered each line, in dB over the
+    # scene's median line. Drives vocal effort below, so a scream gets a
+    # scream's strained edge rather than only more volume.
+    measured_levels = [lv for lv in actor_levels if lv is not None]
+    scene_level = float(np.median(measured_levels)) if measured_levels else 0.0
+    intensity_db = [
+        20 * np.log10(lv / scene_level) if lv is not None and scene_level > 0 else 0.0
+        for lv in actor_levels
+    ]
     for i, seg in enumerate(segments):
         ref, ref_text = seg.reference_audio, seg.reference_text
         # Explicit --emotion always wins; otherwise use this segment's own
@@ -420,12 +433,16 @@ def run(
                 min_ratio=config.min_stretch_ratio, max_ratio=config.max_stretch_ratio,
             )
 
-        # CosyVoice2 renders each segment independently and its output level
-        # varies noticeably line to line even for similar delivery — without
-        # this, that shows up as audibly inconsistent volume across the dub
-        # (a real, reported issue). Emotion-aware so this doesn't flatten
-        # the "whispers"/"angry" dynamics from the classification above.
-        seg.synthesized_audio = loudness.normalize(raw, emotion=seg_emotion)
+        # CosyVoice2's output level varies take to take for no reason to do
+        # with the content, so every line is levelled -- to the actor's level
+        # for that line where it can be measured, else to an emotion preset.
+        effort = loudness.effort_for(intensity_db[i])
+        raw = loudness.vocal_effort(raw, sr, effort)
+        target = actor_levels[i]
+        seg.synthesized_audio = (
+            loudness.match_level(raw, sr, target) if target is not None
+            else loudness.normalize(raw, emotion=seg_emotion)
+        )
         seg.synthesized_sr = sr
         seg.placed_start = start
         spoken = len(raw) / sr
@@ -436,9 +453,10 @@ def run(
             late_lines += 1
             worst_delay = max(worst_delay, delay)
         log.info(
-            "line %d at %.2fs%s: %.2fs spoken in %.2fs of room at %.2fx (%s)",
+            "line %d at %.2fs%s: %.2fs spoken in %.2fs of room at %.2fx (%s, %s, intensity %+.1fdB%s)",
             i, start, f" (+{delay:.2f}s, waited for the previous line)" if delay > 0.05 else "",
-            spoken, available, speed, seg_emotion or "zero-shot",
+            spoken, available, speed, seg_emotion or "zero-shot", seg.speaker_id, intensity_db[i],
+            f", effort +{effort:.1f}dB" if effort > 0.05 else "",
         )
     if late_lines:
         log.info(
