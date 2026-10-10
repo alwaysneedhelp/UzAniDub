@@ -286,45 +286,46 @@ def run(
                 score = reference.clip_quality_score(clip.path)
                 reference_clips[speaker_id] = bank.find_or_add(clip.path, clip.text, score)
 
-        # Prefer each segment's *own* original audio as its cloning
-        # reference over the one fixed speaker-level clip above — a single
-        # reference can't represent a character whose delivery actually
-        # varies within a scene (calm menace vs. a shouted attack name,
-        # say); the segment's own audio already has the right register for
-        # its own content, so using it transfers that per-line instead of
-        # imposing one moment's style on every line a speaker has. Falls
-        # back to the speaker-level clip (and from there, the bundled
-        # default) when a segment's own audio is too short or clipped to be
-        # a reliable reference on its own.
-        montages: dict[str, ReferenceClip | None] = {}
+        # One reference per character, used for every line they speak.
+        #
+        # This used to prefer each line's *own* audio, so that a line copied
+        # the delivery its original had. But delivery now comes from the
+        # emotion preset (inference_instruct2 doesn't feed the reference to
+        # the LLM at all), so the reference only sets the voice -- and a
+        # line's own 1-2 seconds is a weak voice sample. Measured on a real
+        # clip, two *different* characters came out nearly as similar as two
+        # lines of the same one (0.672 vs 0.713 voice similarity, against
+        # 0.558 vs 0.652 for the original actors): everyone drifting toward
+        # the model's default voice. A character's longest clean stretch, or
+        # failing that all their voiced lines joined, is a far stronger
+        # sample and the same one every time.
+        #
+        # Order: the speaker-level clip (matched across episodes by the voice
+        # bank above), then all of the character's voiced lines joined, then
+        # the line's own audio, then the nearest validated real voice.
+        character_refs: dict[str, ReferenceClip | None] = {}
         for i, seg in enumerate(segments):
-            own_clip = reference.extract_segment_reference(
-                seg, vocals_path, work_dir / f"segment_ref_{i:03d}_{seg.speaker_id}.wav",
-                raw_audio_path=full_audio, background_path=background_path,
-                # How far a too-short line may widen its reference window:
-                # the run of neighbouring segments that are still the same
-                # speaker. Lets a half-second line borrow enough surrounding
-                # audio of its own character to be a usable voice sample,
-                # instead of falling back to one clip shared with every other
-                # short line (see stages/reference.py).
-                pad_bounds=_same_speaker_bounds(segments, i),
-            )
-            speaker_clip = reference_clips.get(seg.speaker_id)
-            if own_clip is None and speaker_clip is None:
-                # Neither this line nor one contiguous stretch of this
-                # speaker is long enough on its own: join all of their lines
-                # rather than fall through to the bundled default, which is
-                # a synthetic macOS voice (see reference.speaker_montage).
-                if seg.speaker_id not in montages:
-                    montages[seg.speaker_id] = reference.speaker_montage(
+            if seg.speaker_id not in character_refs:
+                clip = reference_clips.get(seg.speaker_id)
+                if clip is None:
+                    clip = reference.speaker_montage(
                         seg.speaker_id, segments, vocals_path,
                         work_dir / f"montage_{seg.speaker_id}.wav",
                         raw_audio_path=full_audio, background_path=background_path,
                     )
-                speaker_clip = montages[seg.speaker_id]
-            clip = own_clip or speaker_clip
+                character_refs[seg.speaker_id] = clip
+            clip = character_refs[seg.speaker_id]
+            if clip is None:
+                clip = reference.extract_segment_reference(
+                    seg, vocals_path, work_dir / f"segment_ref_{i:03d}_{seg.speaker_id}.wav",
+                    raw_audio_path=full_audio, background_path=background_path,
+                    pad_bounds=_same_speaker_bounds(segments, i),
+                )
             seg.reference_audio = clip.path if clip else config.models.default_reference_audio
             seg.reference_text = clip.text if clip and clip.text else config.models.default_reference_text
+        for speaker_id, clip in character_refs.items():
+            if clip is not None:
+                log.info("%s: cloning every line from one %.1fs reference", speaker_id, _clip_seconds(clip.path))
         _borrow_nearest_human_reference(segments, config.models.default_reference_audio)
     else:
         # --no-clone-voices: every segment uses the one bundled generic
@@ -533,6 +534,12 @@ def _synthesize_take(
     log.warning("%.2fs: no clean take in %d attempts; using the best (%.0f%% voiced)",
                 seg.start, attempts, best_score[0] * 100)
     return best
+
+
+def _clip_seconds(path: Path) -> float:
+    import soundfile as sf
+
+    return float(sf.info(str(path)).duration)
 
 
 def _borrow_nearest_human_reference(segments: list[Segment], default_audio: Path) -> None:
