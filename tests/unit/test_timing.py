@@ -59,13 +59,29 @@ def test_an_empty_take_is_not_resynthesized():
     assert choose_speed(0.0, available=1.0, original_duration=1.0, min_speed=0.9, max_speed=1.25) == 1.0
 
 
-def test_the_cap_stays_gentle_while_lines_are_on_time():
+def test_the_cap_stays_gentle_while_a_line_is_on_time_and_fits():
     from dubtool.stages.timing import speed_cap
-    assert speed_cap(lag=0.1, on_time_cap=1.25, catchup_cap=1.4, catchup_after=0.3) == 1.25
+    assert speed_cap(lag=0.1, natural_duration=1.2, available=1.5,
+                     on_time_cap=1.25, catchup_cap=1.4, catchup_after=0.3) == 1.25
 
 
 def test_the_cap_rises_once_a_line_is_running_late_so_lag_cannot_pile_up():
     # At a flat 1.25x on real dialogue the lag reached 3.4s: lines in the
-    # wrong shot. Raising the cap only while late held it to about 1.1s.
+    # wrong shot.
     from dubtool.stages.timing import speed_cap
-    assert speed_cap(lag=0.6, on_time_cap=1.25, catchup_cap=1.4, catchup_after=0.3) == 1.4
+    assert speed_cap(lag=0.6, natural_duration=1.0, available=2.0,
+                     on_time_cap=1.25, catchup_cap=1.4, catchup_after=0.3) == 1.4
+
+
+def test_the_cap_rises_before_a_line_would_make_the_next_one_late():
+    # The real case: 5.4s of speech at 1.25x in 4.3s of room put the next
+    # four lines a second behind, because the line itself was on time.
+    from dubtool.stages.timing import speed_cap
+    assert speed_cap(lag=0.0, natural_duration=6.75, available=4.32,
+                     on_time_cap=1.25, catchup_cap=1.4, catchup_after=0.3) == 1.4
+
+
+def test_a_small_overrun_does_not_raise_the_cap():
+    from dubtool.stages.timing import speed_cap
+    assert speed_cap(lag=0.0, natural_duration=2.0, available=1.5,
+                     on_time_cap=1.25, catchup_cap=1.4, catchup_after=0.3) == 1.25

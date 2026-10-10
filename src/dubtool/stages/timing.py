@@ -16,8 +16,8 @@ So the priorities are now explicit, in order:
      regenerates the speech) rather than stretching a finished waveform,
      and only as much as the room requires, up to a cap.
   4. If it still doesn't fit, the next line waits for it.
-  5. Once a line is running late, the speed cap rises, so the lag is worked
-     off rather than left to pile up. Waiting for pauses alone doesn't do
+  5. When a line is running late -- or would make the next one late -- the
+     speed cap rises, so lag is worked off rather than left to pile up. Waiting for pauses alone doesn't do
      it: MADLAD's Uzbek ran 45s of natural speech for a 37.5s clip, dense
      dialogue has few pauses, and at a flat 1.25x cap the lag reached 3.4s
      -- lines landing in the wrong shot. Simulated on those real line
@@ -69,8 +69,23 @@ def choose_speed(
     return 1.0
 
 
-def speed_cap(lag: float, on_time_cap: float, catchup_cap: float, catchup_after: float) -> float:
-    """The fastest a line may be spoken. Gentle while lines are on time;
-    higher once this line is starting more than `catchup_after` seconds
-    late, so the delay shrinks instead of accumulating line after line."""
-    return catchup_cap if lag > catchup_after else on_time_cap
+def speed_cap(
+    lag: float,
+    natural_duration: float,
+    available: float,
+    on_time_cap: float,
+    catchup_cap: float,
+    catchup_after: float,
+) -> float:
+    """The fastest a line may be spoken.
+
+    Gentle by default. The cap rises when this line is already more than
+    `catchup_after` late -- and also when, at the gentle cap, it would run
+    that far past its room. The second condition matters as much as the
+    first: raising the cap only once a line is late leaves the line that
+    *causes* the lag at the gentle cap. On a real clip one 5.4s line in 4.3s
+    of room put the next four lines a second behind; anticipating it held
+    the worst mid-clip lag to 1.1s instead of 1.7s, for +0.03x mean speed.
+    """
+    overrun = natural_duration / on_time_cap - max(available, 0.0)
+    return catchup_cap if lag > catchup_after or overrun > catchup_after else on_time_cap

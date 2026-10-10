@@ -400,12 +400,13 @@ def run(
         # from CosyVoice2 itself (mel interpolation before vocoding), which
         # regenerates the speech -- never from stretching finished audio.
         natural = _synthesize_take(backends.tts, sr, seg, ref, ref_text, seg_emotion)
+        natural_duration = len(natural) / sr
         cap = timing.speed_cap(
-            start - seg.start, config.max_native_speed,
-            config.max_catchup_speed, config.catchup_after,
+            start - seg.start, natural_duration, available,
+            config.max_native_speed, config.max_catchup_speed, config.catchup_after,
         )
         speed = timing.choose_speed(
-            len(natural) / sr, available, seg.duration, config.min_native_speed, cap,
+            natural_duration, available, seg.duration, config.min_native_speed, cap,
         )
         if abs(speed - 1.0) < 0.02:
             raw = natural
