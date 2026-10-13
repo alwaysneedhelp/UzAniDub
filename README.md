@@ -216,6 +216,19 @@ attach your videos as a private dataset, add `GEMINI_API_KEY` under
 **Add-ons → Secrets** (or set `TRANSLATOR = "madlad"`), and **Run All**.
 Dubbed files and logs land in `/kaggle/working/output`.
 
+Uploading only the soundtrack works too and is a much smaller upload; it
+comes back as lossless `<name>_uz.flac`. Extract it without re-encoding and
+put the dub back into the video locally:
+
+```powershell
+ffmpeg -i episode.mp4 -vn -c:a copy episode.m4a
+.\.venv\Scripts\python.exe scripts\combine_av.py episode.mp4 episode_uz.flac
+```
+
+`combine_av.py` copies the video stream untouched and writes
+`episode_uz.mp4` next to the audio (`-o` to choose), warning if the two
+lengths differ by more than 2 seconds.
+
 ## Config file
 
 Anything on `DubConfig` (see `src/dubtool/config.py`) can be set via a
