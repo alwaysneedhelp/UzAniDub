@@ -202,6 +202,20 @@ backends:
 dubtool episode1.mp4 --config config.yaml
 ```
 
+With Gemini, names that spaCy detects automatically are passed to the model
+as hints rather than kept verbatim (spaCy also tags show terms such as
+"Limitless Technique" as names, which used to leave English in the dub).
+The prompt asks for Uzbek in Latin script with no English left in, and a
+line that comes back in Cyrillic or with source words in it is retried once.
+
+## Running on Kaggle
+
+`notebooks/kaggle_dub.ipynb` runs the whole pipeline on a free Kaggle GPU:
+import it into a new Kaggle notebook, turn on **GPU T4** and **Internet**,
+attach your videos as a private dataset, add `GEMINI_API_KEY` under
+**Add-ons → Secrets** (or set `TRANSLATOR = "madlad"`), and **Run All**.
+Dubbed files and logs land in `/kaggle/working/output`.
+
 ## Config file
 
 Anything on `DubConfig` (see `src/dubtool/config.py`) can be set via a

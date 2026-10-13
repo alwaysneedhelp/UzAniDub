@@ -69,8 +69,24 @@ Innate Domain: Tug'ma hudud
 Simple Domain: Oddiy hudud
 Six Eyes: Olti ko'z
 Limitless: Cheksizlik
+# The compound needs its own entry: entries match longest-first, so with only
+# "Limitless" above this line came out as "Cheksizlik Technique".
+Limitless Technique: Cheksizlik texnikasi
 Infinity: Cheksiz to'siq
 "Hollow Technique: Purple": "Bo'sh texnika: Binafsha"
+# Hollow Purple as the dialogue names its parts, one word per line in the
+# Gojo vs Toji fight -- the full-name entry above never matched them.
+# Renderings follow Gemini's output on that clip.
+Hollow Purple: Bo'sh binafsha
+Hollow: Bo'sh
+Purple: Binafsha
+"Cursed Technique Lapse: Blue": "La'nat texnikasi Susayish: Ko'k"
+"Cursed Technique Reversal: Red": "La'nat texnikasi Teskarisi: Qizil"
+Amplified: Kuchaytirilgan
+Amplification: Kuchaytirish
+Reversal: Teskarisi
+Imaginary Technique: Xayoliy texnika
+Imaginary Mass: Xayoliy massa
 Unlimited Void: Cheksiz bo'shliq
 Ten Shadows Technique: O'nta soya texnikasi
 Divine Dogs: Ilohiy itlar

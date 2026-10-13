@@ -245,7 +245,8 @@ def run(
         _validate_has_speech(segments)
     # An auto-detected name has no known translation, so it's an identity
     # entry (same mechanism as a manually-supplied --names entry) — see
-    # stages/glossary.py.
+    # stages/glossary.py. A backend with handles_names gets them as hints
+    # instead (Stage 6), since NER also tags show terms as names.
     for name in new_names:
         config.glossary[name] = name
     backends.release("transcriber")
@@ -377,13 +378,16 @@ def run(
             normalized_text = seg.text
         else:
             normalized_text = idioms.normalize(seg.text, source_lang)
-        protected_text, term_map = glossary.protect(normalized_text, config.glossary)
+        protected_text, term_map, hints = _protect_for(
+            backends.translator, normalized_text, config.glossary, new_names,
+        )
         translated = backends.translator.translate(
             protected_text, source_lang=source_lang, target_lang=config.target_language,
             # How long this line may run for. Backends that can't act on it
             # ignore it; one that can is asked to fit, which is cheaper than
             # letting mix.py cut the overrun off mid-word.
             target_duration=seg.duration,
+            **hints,
         )
         seg.translated_text = glossary.restore(translated, term_map)
         log.debug("  %.2fs-%.2fs: %r -> %r", seg.start, seg.end, seg.text, seg.translated_text)
@@ -499,6 +503,26 @@ def run(
 
 
 _LEADING_ARTICLE = re.compile(r"^(?:the|a|an)\s+", re.IGNORECASE)
+
+
+def _protect_for(
+    translator: object, text: str, glossary_map: dict[str, str], auto_names: list[str],
+) -> tuple[str, dict[str, str], dict[str, list[str]]]:
+    """Glossary protection for one line, plus extra translate() kwargs.
+
+    spaCy tags capitalized show terms as names too ("Limitless Technique"),
+    and an identity entry pins them to English: "Shuning uchun Limitless
+    Technique haqida ko'p bilasiz" on real Gemini output. A backend that can
+    tell a character from a technique (handles_names) gets the auto-detected
+    names in the line as hints and translates the terms; the glossary still
+    enforces every entry the user supplied."""
+    if not getattr(translator, "handles_names", False):
+        protected, term_map = glossary.protect(text, glossary_map)
+        return protected, term_map, {}
+    enforced = {term: rendering for term, rendering in glossary_map.items() if term not in auto_names}
+    protected, term_map = glossary.protect(text, enforced)
+    names = [name for name in auto_names if glossary.term_pattern(name).search(protected)]
+    return protected, term_map, {"names": names}
 
 
 def _names_not_in_glossary(detected: list[str], glossary: dict[str, str]) -> list[str]:

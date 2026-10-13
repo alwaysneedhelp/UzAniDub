@@ -36,8 +36,37 @@ idioms, tone, and register as best you can (translate their *meaning/feeling*, n
 word-for-word gloss). Output ONLY the translated text itself — no quotes, no notes, no \
 explanations, nothing else.
 
+Rules:
+- Leave no {source_lang} words in the output. Technique names, attack names, titles and \
+other terms are translated into {target_lang} too; only a person's or place's name stays a name.
+- Tokens like XPRESERVEDTERM3X are fixed terms: copy each one exactly as it is. You may \
+attach {target_lang} suffixes directly after one.{script_rule}{names_rule}
+
 Text:
 {text}"""
+
+# Without a script named, Gemini answers "Uzbek" in Cyrillic for some lines
+# and Latin for others -- observed within a single run. navoiy-tts reads
+# Latin (its normalizer only converts Cyrillic as a fallback).
+_SCRIPT_RULES = {
+    "uz": "Latin alphabet (o', g', sh, ch, ng), never Cyrillic",
+}
+
+# Auto-detected names arrive here as hints instead of being locked to their
+# source spelling: spaCy's NER tags capitalized show terms ("Limitless
+# Technique") as names, and pinning those verbatim left English mid-line in
+# the dub. The model can tell a character from a technique; NER can't.
+_NAMES_RULE = """
+- These words in the text were detected as names: {names}. Keep a person's or place's \
+name as that name, spelled in {target_lang}; if one is really a technique, attack or other \
+term, translate it."""
+
+_RETRY_TEMPLATE = """{prompt}
+
+Your previous answer was:
+{previous}
+
+Problem: {problems}. Give the corrected translation, following every rule above."""
 
 # Appended when the pipeline knows how long the line may run for. Uzbek
 # renders consistently longer than English here: on a real clip 13 of 16
@@ -65,6 +94,9 @@ class GeminiTranslator:
     # meaning, so pipeline should hand this backend the real line rather
     # than stages/idioms.py's plainer rewrite of it.
     handles_idioms = True
+    # Pipeline passes auto-detected names to translate(names=...) instead of
+    # protecting them as verbatim glossary entries (see _NAMES_RULE).
+    handles_names = True
 
     def __init__(
         self,
@@ -101,12 +133,17 @@ class GeminiTranslator:
         source_lang: str,
         target_lang: str,
         target_duration: float | None = None,
+        names: list[str] | None = None,
     ) -> str:
         if not text.strip():
             return ""
+        target_name = _language_name(target_lang)
+        script = _SCRIPT_RULES.get(target_lang)
         prompt = _PROMPT_TEMPLATE.format(
             source_lang=_language_name(source_lang),
-            target_lang=_language_name(target_lang),
+            target_lang=target_name,
+            script_rule=f"\n- Write the {target_name} in the {script}." if script else "",
+            names_rule=_NAMES_RULE.format(names=", ".join(names), target_lang=target_name) if names else "",
             text=text,
         )
         if target_duration and target_duration > 0:
@@ -114,10 +151,62 @@ class GeminiTranslator:
             # very short slot still asks for something sayable.
             words = max(2, int(target_duration * 2.5))
             prompt += _LENGTH_HINT.format(seconds=target_duration, words=words)
+        result = self._ask(prompt, text)
+
+        # One corrective round when the answer still breaks the script or
+        # leaves source words in. Kept only if it is actually better: a name
+        # the model was right to keep would otherwise trade a good line for
+        # a reworded one.
+        problems = _problems(result, text, names or [], target_lang)
+        if result and problems:
+            retry = self._ask(
+                _RETRY_TEMPLATE.format(prompt=prompt, previous=result, problems="; ".join(problems)), text,
+            )
+            if retry and len(_problems(retry, text, names or [], target_lang)) < len(problems):
+                log.info("gemini retranslated %r: %r -> %r (%s)", text[:60], result, retry, "; ".join(problems))
+                return retry
+            log.warning("gemini translation of %r still has: %s", text[:60], "; ".join(problems))
+        return result
+
+    def _ask(self, prompt: str, source_text: str) -> str:
         response = self._client.models.generate_content(
             model=self._model_name, contents=prompt, config=self._config,
         )
-        return _clean((response.text or "").strip(), text)
+        return _clean((response.text or "").strip(), source_text)
+
+
+_CYRILLIC = re.compile(r"[Ѐ-ӿ]")
+_LATIN_WORD = re.compile(r"[A-Za-z]{3,}")
+_PLACEHOLDER = re.compile(r"X[A-Za-z]{0,24}?\d{1,4}X")
+
+
+def _problems(translation: str, source_text: str, names: list[str], target_lang: str) -> list[str]:
+    """What still keeps `translation` from being clean target-language text.
+
+    Leftover source words are words of the source line that reappear in the
+    answer, including with a suffix glued on ("the reversal" came back as
+    "Reversalni" on real output). Names the model was told about are
+    exempt; glossary placeholders are skipped entirely."""
+    found: list[str] = []
+    if target_lang in _SCRIPT_RULES and _CYRILLIC.search(translation):
+        found.append("it uses Cyrillic letters instead of the Latin alphabet")
+
+    exempt = {w.lower() for name in names for w in _LATIN_WORD.findall(name)}
+    source_words = {
+        w.lower() for w in _LATIN_WORD.findall(_PLACEHOLDER.sub(" ", source_text))
+    } - exempt
+    leftover: list[str] = []
+    for word in _LATIN_WORD.findall(_PLACEHOLDER.sub(" ", translation)):
+        low = word.lower()
+        if any(low == src or (len(src) >= 4 and low.startswith(src) and len(low) - len(src) <= 5)
+               for src in source_words) and word not in leftover:
+            leftover.append(word)
+    if leftover:
+        found.append(
+            "these words look untranslated: " + ", ".join(leftover)
+            + " -- translate them, unless one is a person's or place's name"
+        )
+    return found
 
 
 # Markers that mean the model explained itself instead of answering. Each is

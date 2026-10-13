@@ -51,3 +51,6 @@ work/
 /*.mp4
 /*.mkv
 /*.mov
+
+# Episodes you want to dub (copyrighted, not ours to redistribute)
+/input/

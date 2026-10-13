@@ -119,3 +119,108 @@ def test_a_tiny_slot_still_asks_for_something_sayable(monkeypatch):
     translator.translate("no", source_lang="en", target_lang="uz", target_duration=0.2)
 
     assert "2 words" in fake_models.last_call["contents"]
+
+
+class _SequenceModels:
+    """Answers each call with the next response, recording every prompt."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    def generate_content(self, model, contents, config=None):
+        self.calls.append(contents)
+        return _FakeResponse(self._responses.pop(0))
+
+
+def _patch_sequence(monkeypatch, *responses):
+    fake_models = _SequenceModels(responses)
+
+    class _FakeClient:
+        def __init__(self, api_key=None):
+            self.models = fake_models
+
+    monkeypatch.setattr("google.genai.Client", _FakeClient)
+    return fake_models
+
+
+def test_uzbek_is_requested_in_latin_script(monkeypatch):
+    # Without a script named, Gemini answered some lines of one run in
+    # Cyrillic ("Ва хаёлий масса яратиш учун.") and the rest in Latin.
+    fake_models = _patch_client(monkeypatch)
+    GeminiTranslator(api_key="fake-key").translate("hello", source_lang="en", target_lang="uz")
+
+    sent = fake_models.last_call["contents"]
+    assert "Latin alphabet" in sent
+    assert "never Cyrillic" in sent
+
+
+def test_no_source_words_may_be_left_in(monkeypatch):
+    fake_models = _patch_client(monkeypatch)
+    GeminiTranslator(api_key="fake-key").translate("hello", source_lang="en", target_lang="uz")
+
+    assert "Leave no English words in the output" in fake_models.last_call["contents"]
+
+
+def test_names_are_sent_as_hints(monkeypatch):
+    fake_models = _patch_client(monkeypatch, response_text="Shuning uchun Cheksizlik texnikasi haqida bilasiz.")
+    GeminiTranslator(api_key="fake-key").translate(
+        "That's why you know about the Limitless Technique.", source_lang="en", target_lang="uz",
+        names=["Limitless Technique"],
+    )
+
+    sent = fake_models.last_call["contents"]
+    assert "detected as names: Limitless Technique" in sent
+    assert "translate it" in sent
+
+
+def test_no_names_rule_without_names(monkeypatch):
+    fake_models = _patch_client(monkeypatch)
+    GeminiTranslator(api_key="fake-key").translate("hello", source_lang="en", target_lang="uz")
+
+    assert "detected as names" not in fake_models.last_call["contents"]
+
+
+def test_a_cyrillic_answer_is_retried_in_latin(monkeypatch):
+    fake_models = _patch_sequence(monkeypatch, "Хаёлий техника.", "Xayoliy texnika.")
+    result = GeminiTranslator(api_key="fake-key").translate(
+        "Imaginary technique.", source_lang="en", target_lang="uz",
+    )
+
+    assert result == "Xayoliy texnika."
+    assert len(fake_models.calls) == 2
+    assert "Cyrillic" in fake_models.calls[1]
+    assert "Хаёлий техника." in fake_models.calls[1]
+
+
+def test_a_leftover_source_word_with_a_suffix_is_retried(monkeypatch):
+    # Real output: "the reversal" came back as "Reversalni".
+    fake_models = _patch_sequence(
+        monkeypatch, "Kuchaytirilganini va Reversalni olib.", "Kuchaytirilganini va teskarisini olib.",
+    )
+    result = GeminiTranslator(api_key="fake-key").translate(
+        "Take the amplified and the reversal.", source_lang="en", target_lang="uz",
+    )
+
+    assert result == "Kuchaytirilganini va teskarisini olib."
+    assert "Reversalni" in fake_models.calls[1]
+
+
+def test_retry_is_dropped_when_it_is_no_better(monkeypatch):
+    # The model was right to keep a name it wasn't told about; the first,
+    # unreworded answer stays.
+    fake_models = _patch_sequence(monkeypatch, "Toji keldi.", "Toji yetib keldi.")
+    result = GeminiTranslator(api_key="fake-key").translate("Toji is here.", source_lang="en", target_lang="uz")
+
+    assert result == "Toji keldi."
+    assert len(fake_models.calls) == 2
+
+
+def test_hinted_names_and_placeholders_do_not_trigger_a_retry(monkeypatch):
+    fake_models = _patch_sequence(monkeypatch, "Gojo XPRESERVEDTERM0Xni ishlatdi.")
+    result = GeminiTranslator(api_key="fake-key").translate(
+        "Gojo used XPRESERVEDTERM0X.", source_lang="en", target_lang="uz", names=["Gojo"],
+    )
+
+    assert result == "Gojo XPRESERVEDTERM0Xni ishlatdi."
+    assert len(fake_models.calls) == 1

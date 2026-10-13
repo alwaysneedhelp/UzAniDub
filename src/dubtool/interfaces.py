@@ -60,6 +60,9 @@ class Translator(Protocol):
         target_lang: str,
         target_duration: float | None = None,
     ) -> str: ...
+    # A backend that sets `handles_names = True` also accepts
+    # translate(..., names=[...]): auto-detected names as hints, rather than
+    # pipeline pinning them to their source spelling via the glossary.
 
 
 class TTSBackend(Protocol):
