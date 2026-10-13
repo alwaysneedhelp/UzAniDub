@@ -40,7 +40,7 @@ Rules:
 - Leave no {source_lang} words in the output. Technique names, attack names, titles and \
 other terms are translated into {target_lang} too; only a person's or place's name stays a name.
 - Tokens like XPRESERVEDTERM3X are fixed terms: copy each one exactly as it is. You may \
-attach {target_lang} suffixes directly after one.{script_rule}{names_rule}
+attach {target_lang} suffixes directly after one, with no apostrophe or hyphen in between.{script_rule}{names_rule}
 
 Text:
 {text}"""

@@ -74,6 +74,7 @@ def protect(text: str, glossary: dict[str, str]) -> tuple[str, dict[str, str]]:
 # gibberish. Observed on real Gemini output. The classic NMT backends pass
 # the token through untouched, which is why this only shows up with an LLM.
 _MANGLED_PLACEHOLDER = re.compile(r"X[A-Za-z]{0,24}?(\d{1,4})X")
+_APOSTROPHE_AFTER_PLACEHOLDER = re.compile(r"(X[A-Za-z]{0,24}?\d{1,4}X)['ʼ’`](?=[^\W\d_])")
 
 
 def restore(text: str, mapping: dict[str, str]) -> str:
@@ -82,6 +83,11 @@ def restore(text: str, mapping: dict[str, str]) -> str:
 
     Matches on the index rather than the literal placeholder, so a backend
     that rewrote the surrounding letters still gets its term restored."""
+    # An LLM sets a suffix off from a token with an apostrophe
+    # ("XPRESERVEDTERM3X'ni"), which restored as "Teskarisi'ni" on real
+    # Gemini output. No Uzbek suffix starts with one, and the term's own
+    # apostrophes (Bo'sh) live inside its rendering, not after the token.
+    text = _APOSTROPHE_AFTER_PLACEHOLDER.sub(r"\1", text)
     for placeholder, translation in mapping.items():
         text = text.replace(placeholder, translation)
     if not mapping or "X" not in text:

@@ -116,3 +116,18 @@ def test_an_english_plural_is_absorbed_into_the_term():
 def test_a_possessive_still_protects_the_name():
     protected, _ = protect("Gojo's eyes", {"Gojo": "Gojo"})
     assert "Gojo" not in protected
+
+
+def test_an_apostrophe_between_a_term_and_its_suffix_is_dropped():
+    # Real Gemini output: "XPRESERVEDTERM3X'ni" restored as "Teskarisi'ni".
+    mapping = {"XPRESERVEDTERM3X": "Teskarisi"}
+    assert restore("Kuchaytirilgan bilan XPRESERVEDTERM3X'ni olib.", mapping) == (
+        "Kuchaytirilgan bilan Teskarisini olib."
+    )
+    assert restore("XPRESERVEDTERM3X’ga", mapping) == "Teskarisiga"
+
+
+def test_a_term_s_own_apostrophe_and_closing_quotes_are_kept():
+    mapping = {"XPRESERVEDTERM0X": "Bo'sh binafsha"}
+    assert restore("XPRESERVEDTERM0Xni ko'r.", mapping) == "Bo'sh binafshani ko'r."
+    assert restore("'XPRESERVEDTERM0X' dedi.", mapping) == "'Bo'sh binafsha' dedi."

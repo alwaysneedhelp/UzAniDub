@@ -117,6 +117,10 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    # -v is for dubtool's own debug lines. numba (librosa's JIT) logs every
+    # type-inference attempt it retries at DEBUG, tracebacks included: 52k
+    # lines for one 25s clip on Kaggle, burying the translations.
+    logging.getLogger("numba").setLevel(logging.WARNING)
     log = logging.getLogger("dubtool.cli")
 
     config = DubConfig.from_yaml(args.config) if args.config else DubConfig()
